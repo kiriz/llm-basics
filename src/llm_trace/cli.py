@@ -50,7 +50,9 @@ def run(
     """Collect traces for the matrix in the config, then run the configured renderers."""
     import os
     if offline:
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        # Assign rather than setdefault — the user passed --offline explicitly,
+        # so an inherited HF_HUB_OFFLINE=0 in the shell shouldn't override it.
+        os.environ["HF_HUB_OFFLINE"] = "1"
 
     # Lazy-import anything that pulls torch:
     from llm_trace.collector import Collector, load_model
@@ -235,7 +237,7 @@ def embeddings(
     """Build a self-contained HTML page exploring the model's embedding matrix."""
     import os
     if offline:
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ["HF_HUB_OFFLINE"] = "1"
     from llm_trace.embeddings import explore
     from llm_trace.renderers._util import short_model_slug
     if out is None:

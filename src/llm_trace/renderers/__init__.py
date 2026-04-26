@@ -7,7 +7,7 @@ from __future__ import annotations
 
 # Registry populated lazily to avoid importing matplotlib/rich when not used.
 # Consumers: use get_renderer(name) rather than a static dict.
-_RENDERERS = ("terminal", "png", "html", "comparison", "animated", "animated_v2", "animated_v3")
+_RENDERERS = ("terminal", "png", "html", "comparison", "animated_v3")
 
 
 def get_renderer(name: str):
@@ -22,12 +22,6 @@ def get_renderer(name: str):
         return fn
     if name == "comparison":
         from llm_trace.renderers.html import render_comparison as fn
-        return fn
-    if name == "animated":
-        from llm_trace.renderers.animated import render as fn
-        return fn
-    if name == "animated_v2":
-        from llm_trace.renderers.animated_v2 import render as fn
         return fn
     if name == "animated_v3":
         from llm_trace.renderers.animated_v3 import render as fn

@@ -41,8 +41,6 @@ def _fresh_import_check(module: str) -> subprocess.CompletedProcess:
 @pytest.mark.parametrize("module", ["llm_trace.renderers.terminal",
                                      "llm_trace.renderers.png",
                                      "llm_trace.renderers.html",
-                                     "llm_trace.renderers.animated",
-                                     "llm_trace.renderers.animated_v2",
                                      "llm_trace.renderers.animated_v3"])
 def test_renderer_import_does_not_require_torch(module: str) -> None:
     result = _fresh_import_check(module)
@@ -183,17 +181,6 @@ def test_html_escapes_closing_script_tag_in_prompt(tmp_path: Path):
     # The prompt appears in the JSON payload — should be neutralized
     assert "</script><img" not in text
     assert "<\\/script>" in text
-
-
-def test_animated_writes_nonempty_file(tmp_path: Path):
-    from llm_trace.renderers import animated
-    out = animated.render(_fake_trace(), out_path=tmp_path / "anim.html")
-    text = out.read_text()
-    assert "<html" in text
-    assert "const D =" in text
-    assert "Act I" in text     # scene marker present
-    assert "Act II" in text
-    assert "Act III" in text
 
 
 def test_html_comparison_grid_lays_out_traces(tmp_path: Path):

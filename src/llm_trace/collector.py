@@ -263,7 +263,7 @@ class Collector:
 
         # ── Per-token residual-stream norms across all layer outputs ──
         # Shape: (n_layers+1, n_tokens). Powers the token × layer heatmap
-        # in animated_v2.py — viewer sees one stream per input token.
+        # in animated_v3.py — viewer sees one stream per input token.
         hidden_norms = np.stack([
             np.linalg.norm(hs[0].detach().float().numpy(), axis=-1)
             for hs in out.hidden_states
@@ -567,7 +567,15 @@ def _generate(
     for i in range(max_new):
         t0 = time.perf_counter()
         with torch.no_grad():
-            out = model(torch.tensor([current]), output_hidden_states=True)
+            # use_cache=False: we deliberately recompute every step so each
+            # forward pass produces a fresh hidden_states tuple for the full
+            # sequence — that's the educational point. Without this, HF builds
+            # a KV cache we never read, eating RAM.
+            out = model(
+                torch.tensor([current]),
+                output_hidden_states=True,
+                use_cache=False,
+            )
         dt = (time.perf_counter() - t0) * 1000
         per_token_ms.append(round(dt, 1))
 
