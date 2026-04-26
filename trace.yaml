@@ -1,0 +1,57 @@
+# llm-trace configuration.
+#
+# CLI overrides apply on top of this file. Example:
+#     llm-trace run --config trace.yaml \
+#         --override generation.max_new_tokens=20 \
+#         --override renderers='["html"]'
+#
+# See src/llm_trace/config.py for the full default schema.
+
+models:
+  - id: distilgpt2
+    alias: distilgpt2
+  - id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    alias: tinyllama
+
+prompts:
+  - name: round_apple
+    text: "Apple is round and"
+    # system: "You are a fruit expert"   # optional; chat-tuned models use it directly,
+                                          # base models get it as plain prefixed context
+  - name: market
+    text: "The stock market today is"
+  # Chat-style (needs a model with tokenizer.chat_template):
+  # - name: physics_q
+  #   system: "You are a Physicist"
+  #   chat: [{role: user, content: "What is gravity?"}]
+
+generation:
+  max_new_tokens: 50        # let the model complete its internal loop
+                            # (stop_on_eos below still ends it early if the
+                            # model emits EOS)
+  temperature: 0.0          # 0.0 == greedy decoding
+  seed: 42                  # determinism under temperature > 0
+  stop_on_eos: true
+  show_eos_experiment: false
+  extra_temps_for_viz: [0.1, 0.7, 1.5]
+
+collection:
+  attention:
+    # Which attention slices to persist. Use explicit indices for narrow
+    # captures, or "all" for every layer / head. "all" enables the head
+    # switcher tabs in the HTML viz.
+    layers: [0]         # only layer 0 by default (every added layer is seq²·heads floats)
+    heads: all          # every head at the configured layer(s)
+  hidden_dims_keep: 32
+  top_k: 15
+  generation_top_k: 5
+
+renderers: [terminal, html]   # any subset of:
+                              #   terminal | png | html | comparison | animated
+                              # animated = scene-based playback (Acts I/II/III)
+out_dir: ./out
+open_browser: false
+
+cache:
+  dir: .trace_cache
+  enabled: true

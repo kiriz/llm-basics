@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm-basics"
+version = "0.1.0"
+description = "Step-by-step animated visualization of how an LLM turns a prompt into the next token. HuggingFace transformers under the hood; renders as standalone HTML."
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    # Local LLM tracing — the model + tokenizer
+    "transformers>=4.40",
+    "torch>=2.2",
+
+    # Numerics & config
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+
+    # CLI
+    "typer>=0.12",
+    "rich>=13.0",
+
+    # Static visualizations (PNG renderer)
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+llm-trace = "llm_trace.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_trace"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "playwright>=1.58.0",
+]
