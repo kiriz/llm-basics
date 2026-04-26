@@ -29,6 +29,24 @@ Each animated demo walks through 9 steps:
 
 A right-side "where am I in the stack?" panel shows whether each step happens in the **frontend**, **inference runtime** (HuggingFace transformers), or **model** (the weights themselves).
 
+## Highlights
+
+Step 4 — **residual stream evolution through layers**. Each row is the same last-token vector after one more transformer block. The norm bar on the right shows how much "magnitude" each layer adds.
+
+![Residual stream heatmap across layers](docs/screenshots/01-layers-residual-heatmap.png)
+
+Step 5 — **LM head as similarity search**. The final hidden state gets dot-producted against every vocab token's W-row in parallel; top-3 candidates shown with their actual W-row vectors and logit scores.
+
+![LM head similarity search](docs/screenshots/02-logits-similarity-search.png)
+
+Step 8 — **the autoregressive loop**. 138 generated tokens (TinyLlama answering "Name three primary colors.") with the prompt in muted gray and EOS as a red chip at the end.
+
+![Loop with 138 generated tokens](docs/screenshots/03-loop-138-tokens.png)
+
+Step 8, expanded — **the matmul that emits EOS**. At step 138 the model picked `</s>` (logit +16.59) over `They` (+15.80) and `The` (+13.40). Click any candidate row to see all 2048 dims of the W-row that made it the winner.
+
+![EOS-step LM head matmul](docs/screenshots/04-eos-step-matmul.png)
+
 ## Run it locally
 
 Requires `uv` (https://astral.sh/uv) and a working Python 3.11+.
