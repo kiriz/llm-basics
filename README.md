@@ -6,14 +6,12 @@ The point: demystify "the model is just a function over learned weights". Each s
 
 ## Live demos
 
-The rendered HTML demos are published to GitHub Pages:
+Hosted on GitHub Pages: **https://kiriz.github.io/llm-basics/**
 
-- **[distilgpt2 — "January, February, March,"](docs/distilgpt2-january-february-march.html)** — 6-layer GPT-2 base model completing a sequence
-- **[TinyLlama — "Name three primary colors."](docs/tinyllama-name-three-primary-colors.html)** — 22-layer chat-tuned Llama answering a question
-- **[Embedding-space scatter (distilgpt2)](docs/embeddings-distilgpt2.html)** — PCA projection of all 50,257 vocab tokens
-- **[Embedding-space scatter (TinyLlama)](docs/embeddings-tinyllama.html)** — same, for TinyLlama's 32,000 vocab
-
-Open `docs/` for the index page.
+- **[distilgpt2 — "January, February, March,"](https://kiriz.github.io/llm-basics/distilgpt2-january-february-march.html)** — 6-layer GPT-2 base model completing a sequence
+- **[TinyLlama — "Name three primary colors."](https://kiriz.github.io/llm-basics/tinyllama-name-three-primary-colors.html)** — 22-layer chat-tuned Llama answering a question
+- **[Embedding-space scatter (distilgpt2)](https://kiriz.github.io/llm-basics/embeddings-distilgpt2.html)** — PCA projection of all 50,257 vocab tokens
+- **[Embedding-space scatter (TinyLlama)](https://kiriz.github.io/llm-basics/embeddings-tinyllama.html)** — same, for TinyLlama's 32,000 vocab
 
 ## What the demo shows
 
