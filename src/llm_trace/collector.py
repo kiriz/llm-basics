@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_trace import cache
-from llm_trace.trace_data import TraceData   # re-exported below
+from llm_trace.trace_data import TraceData  # re-exported below
 
 __all__ = ["CollectionConfig", "LoadedModel", "TraceData", "Collector", "load_model"]
 
@@ -216,7 +216,6 @@ class Collector:
 
         tokenizer = loaded.tokenizer
         model = loaded.model
-        mcfg = loaded.config
         dims_keep = self.cfg.hidden_dims_keep
         top_k = self.cfg.top_k
 
@@ -400,8 +399,8 @@ def _resolve_prompt(
     elif system and not is_chat:
         if not _BASE_MODEL_SYSTEM_WARNED:
             print(
-                f"[collector] warning: model is not chat-tuned; "
-                f"prepending system text as plain context."
+                "[collector] warning: model is not chat-tuned; "
+                "prepending system text as plain context."
             )
             _BASE_MODEL_SYSTEM_WARNED = True
         templated = f"System: {system}\n\n{original}"

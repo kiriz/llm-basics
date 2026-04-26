@@ -76,7 +76,7 @@ def _plot_top_probs(ax, trace) -> None:
     ax.set_title(f"2. Top-{k} next-token probabilities", fontsize=11, fontweight="bold")
     ax.grid(True, axis="x", alpha=0.3)
 
-    for bar, p in zip(bars, values):
+    for bar, p in zip(bars, values, strict=False):
         ax.text(max(p * 1.15, 1e-6), bar.get_y() + bar.get_height() / 2,
                 f"{p:.4f}", va="center", fontsize=8)
 

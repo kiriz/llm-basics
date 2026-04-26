@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.18.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -29,8 +29,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.4",
+    "ruff>=0.14.0,<0.15.0",
+    "playwright>=1.58.0",
 ]
 
 [project.scripts]
@@ -40,17 +40,39 @@ llm-trace = "llm_trace.cli:app"
 packages = ["src/llm_trace"]
 
 [tool.ruff]
-line-length = 100
 target-version = "py311"
+line-length = 100
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # Line too long (let formatter handle it)
+    "B008",   # Do not perform function calls in argument defaults (typer Option pattern)
+    "C901",   # Too complex
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["llm_trace"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[dependency-groups]
-dev = [
-    "playwright>=1.58.0",
-]

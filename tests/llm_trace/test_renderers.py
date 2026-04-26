@@ -17,7 +17,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-
 SRC = Path(__file__).resolve().parents[2] / "src"
 
 
@@ -38,7 +37,9 @@ def _fresh_import_check(module: str) -> subprocess.CompletedProcess:
 @pytest.mark.parametrize("module", ["llm_trace.renderers.terminal",
                                      "llm_trace.renderers.png",
                                      "llm_trace.renderers.html",
-                                     "llm_trace.renderers.animated"])
+                                     "llm_trace.renderers.animated",
+                                     "llm_trace.renderers.animated_v2",
+                                     "llm_trace.renderers.animated_v3"])
 def test_renderer_import_does_not_require_torch(module: str) -> None:
     result = _fresh_import_check(module)
     assert result.returncode == 0, (
@@ -143,6 +144,7 @@ def test_html_js_does_not_reference_removed_fields(tmp_path: Path):
     is known to come from the per-step payload.
     """
     import re
+
     from llm_trace.renderers import html
     out = html.render(_fake_trace(), out_path=tmp_path / "out.html")
     text = out.read_text()

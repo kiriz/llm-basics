@@ -33,9 +33,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
-
 # ── Data shaping ───────────────────────────────────────────────────────────
 
 def _short_model_slug(model_id: str) -> str:
@@ -76,7 +73,7 @@ def _build_anim_payload(trace) -> dict[str, Any]:
     attn_matrix = trace.attentions[attn_key].tolist() if attn_key else None
 
     # Per-step data for Act III.
-    n_steps = len(trace.generation)
+    len(trace.generation)
     psn = trace.per_step_hidden_norms
     per_token_ms = trace.timings.get("per_token_ms", [])
 
@@ -100,13 +97,13 @@ def _build_anim_payload(trace) -> dict[str, Any]:
     probs_top_first = [
         {"token": tok, "id": int(tid), "prob": float(v)}
         for tok, tid, v in zip(
-            trace.probs_top_tokens, trace.probs_top_ids, trace.probs_top_values
+            trace.probs_top_tokens, trace.probs_top_ids, trace.probs_top_values, strict=False
         )
     ][:10]
     logits_top_first = [
         {"token": tok, "id": int(tid), "logit": float(v)}
         for tok, tid, v in zip(
-            trace.logits_top_tokens, trace.logits_top_ids, trace.logits_top_values
+            trace.logits_top_tokens, trace.logits_top_ids, trace.logits_top_values, strict=False
         )
     ][:10]
     # Embedding (token part) of each input token, truncated.

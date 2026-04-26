@@ -11,7 +11,6 @@ import pytest
 
 from llm_trace import collector
 
-
 # ── Pure-unit tests (no model download) ────────────────────────────────────
 
 def test_chat_template_applied_when_tokenizer_has_template():

@@ -26,8 +26,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 
 def _short_model_slug(model_id: str) -> str:
     last = model_id.rsplit("/", 1)[-1]
@@ -53,19 +51,18 @@ def _build_payload(trace) -> dict[str, Any]:
     logits_top = [
         {"token": tok, "id": int(tid), "logit": float(v)}
         for tok, tid, v in zip(
-            trace.logits_top_tokens, trace.logits_top_ids, trace.logits_top_values
+            trace.logits_top_tokens, trace.logits_top_ids, trace.logits_top_values, strict=False
         )
     ][:10]
     probs_top = [
         {"token": tok, "id": int(tid), "prob": float(v)}
         for tok, tid, v in zip(
-            trace.probs_top_tokens, trace.probs_top_ids, trace.probs_top_values
+            trace.probs_top_tokens, trace.probs_top_ids, trace.probs_top_values, strict=False
         )
     ][:10]
 
     # Per-generation-step (for Step 8 loop view).
     per_step = []
-    psn = trace.per_step_hidden_norms
     per_token_ms = trace.timings.get("per_token_ms", [])
     for i, s in enumerate(trace.generation):
         per_step.append({

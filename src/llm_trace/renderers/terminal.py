@@ -83,7 +83,7 @@ def _show_step_1_tokens(trace) -> None:
     tbl.add_column("Pos", style="dim")
     tbl.add_column("Token", style="yellow")
     tbl.add_column("ID", style="green")
-    for i, (tok, tid) in enumerate(zip(trace.tokens, trace.token_ids)):
+    for i, (tok, tid) in enumerate(zip(trace.tokens, trace.token_ids, strict=False)):
         tbl.add_row(str(i), repr(tok), str(tid))
     console.print(tbl)
     console.print(f"\n  [bold]{len(trace.tokens)} tokens[/bold] from "
@@ -102,7 +102,7 @@ def _show_step_3_embeddings(trace) -> None:
     _step(3, "Embedding lookup  (IDs → dense vectors)")
     _dim(f"Each id indexes into the embedding matrix (vocab × hidden). "
          f"Showing first {trace.embeddings_token.shape[1]} dims.")
-    for i, (tok, tid) in enumerate(zip(trace.tokens, trace.token_ids)):
+    for i, (tok, tid) in enumerate(zip(trace.tokens, trace.token_ids, strict=False)):
         vec = trace.embeddings_token[i]
         console.print(f"  token[{i}] {repr(tok):14s} id={tid:<6}  "
                       f"shape=[green]({vec.shape[0]}+,)[/green]  {_fmt_vec(vec)}")

@@ -23,7 +23,6 @@ from typing import Any
 
 import numpy as np
 
-
 # ── Curated landmark tokens (semantic anchor groups) ──────────────────────
 # Each entry is a string with the leading-space variant — that's how GPT-2's
 # BPE tokenizer represents most words mid-sentence, and they'll be single

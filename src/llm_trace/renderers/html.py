@@ -18,9 +18,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
-
 # ── Data shaping ──────────────────────────────────────────────────────────
 
 def _build_viz_data(trace) -> dict[str, Any]:
@@ -36,7 +33,7 @@ def _build_viz_data(trace) -> dict[str, Any]:
 
     embeddings = []
     has_pos = trace.embeddings_pos is not None
-    for i, (tok, tid) in enumerate(zip(trace.tokens, trace.token_ids)):
+    for i, (tok, tid) in enumerate(zip(trace.tokens, trace.token_ids, strict=False)):
         entry = {
             "token": tok,
             "id": int(tid),
@@ -79,13 +76,13 @@ def _build_viz_data(trace) -> dict[str, Any]:
     logits_top = [
         {"token": tok, "id": int(tid), "logit": float(v)}
         for tok, tid, v in zip(
-            trace.logits_top_tokens, trace.logits_top_ids, trace.logits_top_values
+            trace.logits_top_tokens, trace.logits_top_ids, trace.logits_top_values, strict=False
         )
     ]
     probs_top = [
         {"token": tok, "id": int(tid), "prob": float(v)}
         for tok, tid, v in zip(
-            trace.probs_top_tokens, trace.probs_top_ids, trace.probs_top_values
+            trace.probs_top_tokens, trace.probs_top_ids, trace.probs_top_values, strict=False
         )
     ]
 
@@ -98,7 +95,7 @@ def _build_viz_data(trace) -> dict[str, Any]:
     # Per-step generation data: combine the dict-based `generation` with the
     # array-based per_step_* fields into one list-of-dicts for the HTML table.
     per_step = []
-    n_steps = len(trace.generation)
+    len(trace.generation)
     psn = trace.per_step_hidden_norms
     psi = trace.per_step_top_ids
     psp = trace.per_step_top_probs
@@ -726,7 +723,7 @@ def _comparison_cell(model_id: str, prompt: str, trace) -> str:
     had_eos = any(s.get("is_eos") for s in trace.generation)
 
     bars = []
-    for tok, p in list(zip(trace.probs_top_tokens, trace.probs_top_values))[:5]:
+    for tok, p in list(zip(trace.probs_top_tokens, trace.probs_top_values, strict=False))[:5]:
         p = float(p)
         color = "#00d4aa" if p > 0.4 else "#ffb800" if p > 0.15 else "#4da6ff"
         w = min(100, p * 100)

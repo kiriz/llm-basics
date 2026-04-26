@@ -11,7 +11,6 @@ Matrix loop lives inline here — no separate matrix.py per the simplicity bias.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
 
 import typer
 
@@ -30,16 +29,16 @@ def run(
     config_path: Path = typer.Option(
         Path("trace.yaml"), "--config", "-c", help="YAML config file"
     ),
-    prompt: List[str] = typer.Option(
+    prompt: list[str] = typer.Option(
         [], "--prompt", "-p",
         help="One-off prompt string. Repeatable. Replaces the config's `prompts:` list.",
     ),
-    system: Optional[str] = typer.Option(
+    system: str | None = typer.Option(
         None, "--system", "-s",
         help="System prompt applied to every --prompt in this run. "
              "Example: 'You are a Physicist'.",
     ),
-    override: List[str] = typer.Option(
+    override: list[str] = typer.Option(
         [], "--override", "-o",
         help="Config override 'dotted.key=value'. Repeatable. JSON values allowed.",
     ),
@@ -113,9 +112,18 @@ def run(
 @app.command()
 def render(
     config_path: Path = typer.Option(Path("trace.yaml"), "--config", "-c"),
-    override: List[str] = typer.Option([], "--override", "-o"),
+    override: list[str] = typer.Option([], "--override", "-o"),
 ) -> None:
-    """Re-render from the cache — does NOT load any model."""
+    """Re-render from the cache — does NOT load any model.
+
+    Cache lookups match by metadata (model_id, prompt, system_prompt, gen_params)
+    instead of recomputing the key. The collector's key is hashed from the
+    templated prompt (chat-template-wrapped for chat models) plus a system-prompt
+    augmentation — neither is reachable here without loading a tokenizer, which
+    is the whole point of the render path being torch-free.
+    """
+    import json as _json
+
     cfg = config.load_config(config_path, overrides=override)
     models = cfg.get("models") or []
     prompts = cfg.get("prompts") or []
@@ -126,16 +134,44 @@ def render(
         typer.secho("config has no models or prompts", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
+    # Build (model_id, prompt, system_prompt, gen_params_json) → cache_key index
+    # by walking the cache dir's metadata files. Loading just the .json (not .npz)
+    # keeps this cheap.
+    index: dict[tuple, str] = {}
+    if cache_dir.exists():
+        for meta_path in cache_dir.glob("*.json"):
+            if meta_path.name.endswith(".tmp"):
+                continue
+            try:
+                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+            except _json.JSONDecodeError:
+                continue
+            sig = (
+                meta.get("model_id"),
+                meta.get("prompt"),
+                meta.get("system_prompt"),
+                _json.dumps(meta.get("gen_params"), sort_keys=True, default=str),
+            )
+            index[sig] = meta_path.stem
+
+    gen_params_sig = _json.dumps(gen_params, sort_keys=True, default=str)
+
     traces: list[TraceData] = []
     misses: list[str] = []
-    for m in models:
+    for model in models:
         for p in prompts:
             prompt_value = _prompt_value(p)
-            templated = prompt_value if isinstance(prompt_value, str) else _encode_chat(prompt_value)
-            key = cache.cache_key(m["id"], templated, gen_params)
+            stored_prompt = (
+                prompt_value if isinstance(prompt_value, str) else _json.dumps(prompt_value)
+            )
+            sig = (model["id"], stored_prompt, p.get("system"), gen_params_sig)
+            key = index.get(sig)
+            if key is None:
+                misses.append(f"{model['id']} × {_prompt_label(p)}")
+                continue
             hit = cache.load(key, cache_dir)
             if hit is None:
-                misses.append(f"{m['id']} × {_prompt_label(p)}")
+                misses.append(f"{model['id']} × {_prompt_label(p)}")
                 continue
             arrays, meta = hit
             traces.append(TraceData.from_cache_payload(arrays, meta))
@@ -145,8 +181,8 @@ def render(
             f"cache miss for {len(misses)} cell(s) — run `llm-trace run` first:",
             fg=typer.colors.YELLOW, err=True,
         )
-        for m in misses:
-            typer.secho(f"  - {m}", fg=typer.colors.YELLOW, err=True)
+        for miss in misses:
+            typer.secho(f"  - {miss}", fg=typer.colors.YELLOW, err=True)
 
     if not traces:
         typer.secho("no cached traces found — nothing to render", fg=typer.colors.RED, err=True)
@@ -189,7 +225,7 @@ def list_cache(
 def embeddings(
     prompt: str = typer.Option(..., "--prompt", "-p", help="Prompt whose tokens are highlighted in the scatter."),
     model: str = typer.Option("distilgpt2", "--model", "-m"),
-    out: Optional[Path] = typer.Option(None, "--out", "-o",
+    out: Path | None = typer.Option(None, "--out", "-o",
         help="Output HTML path. Default: out/embeddings_<model-slug>.html"),
     n_neighbors: int = typer.Option(8, "--neighbors", help="Nearest-neighbor count per prompt token."),
     background: int = typer.Option(200, "--background", help="Random vocab tokens for density texture."),
@@ -258,20 +294,6 @@ def _prompt_label(p: dict) -> str:
     if "chat" in p and not preview and p["chat"]:
         preview = str(p["chat"][0].get("content", ""))[:30]
     return f"{name} ({preview[:40]!r})" if name else repr(preview[:40])
-
-
-def _encode_chat(msgs: list) -> str:
-    """Fallback-serialize a chat message list when we cannot use a tokenizer
-    (render path, no torch). The collector used the real chat template on save,
-    so the cache key was computed from that. To look up by key here we need the
-    SAME string the collector hashed. That requires a tokenizer, which we don't
-    have in render. Workaround: assume the collector stored the templated_prompt
-    in the cache; here we just serialize the list so the render path still
-    produces a valid key format. Cache lookups will miss if the prompt was a
-    chat list — user must run `llm-trace run` first to warm the cache.
-    """
-    import json as _json
-    return _json.dumps(msgs)
 
 
 def _render_all(traces: list[TraceData], renderers: list[str], out_dir: Path, cfg: dict) -> None:

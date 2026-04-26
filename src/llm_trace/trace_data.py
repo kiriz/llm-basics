@@ -141,7 +141,7 @@ class TraceData:
     @classmethod
     def from_cache_payload(
         cls, arrays: dict[str, np.ndarray], meta: dict[str, Any]
-    ) -> "TraceData":
+    ) -> TraceData:
         attentions = {
             k.removeprefix("attn__"): v for k, v in arrays.items() if k.startswith("attn__")
         }
