@@ -281,17 +281,24 @@ class Collector:
         # exact vectors dot-producted with the final hidden state to produce
         # each logit (logit[i] = <final_hidden_full, W_lm_head[id_i]>). Shipping
         # only the top-K rows keeps payload tiny vs the full [vocab × hidden].
+        # Index in torch first to avoid materializing the whole [vocab × hidden]
+        # matrix as numpy (~262 MB for TinyLlama, multiple GB for big-vocab models).
         lm_head = model.get_output_embeddings()
-        lm_head_w = lm_head.weight.detach().float().cpu().numpy()
-        lm_head_top_rows = np.stack(
-            [lm_head_w[int(tid)] for tid in logits_top_ids]
-        ).astype(np.float32)
-        # Tied-weight detection — used by the LM-head step to explain whether
-        # this row is the same as the input embedding (GPT-2) or a different
-        # learned matrix (Llama).
-        in_emb_w = model.get_input_embeddings().weight
-        out_emb_w = lm_head.weight
-        tied = bool(in_emb_w.data_ptr() == out_emb_w.data_ptr())
+        top_ids_tensor = torch.tensor([int(tid) for tid in logits_top_ids])
+        lm_head_top_rows = (
+            lm_head.weight[top_ids_tensor]
+            .detach().to("cpu", torch.float32).numpy()
+        )
+        # Tied-weight detection: prefer the HF config flag (idiomatic, robust
+        # under accelerate/device-map) and fall back to data_ptr comparison.
+        config_tied = bool(getattr(loaded.config, "tie_word_embeddings", False))
+        if config_tied:
+            tied = True
+        else:
+            tied = bool(
+                model.get_input_embeddings().weight.data_ptr()
+                == lm_head.weight.data_ptr()
+            )
         loaded.arch_info["tied_word_embeddings"] = tied
 
         # ── Temperature scan ──────────────────────────────────────────
@@ -300,7 +307,7 @@ class Collector:
         )
 
         # ── Autoregressive generation (with per-step capture) ──────────
-        generation, per_token_ms, per_step_hidden_norms, per_step_top_ids, per_step_top_probs = _generate(
+        gen_result = _generate(
             model,
             tokenizer,
             token_ids_list,
@@ -308,7 +315,17 @@ class Collector:
             eos_ids=loaded.eos_ids,
             top_k_alts=self.cfg.generation_top_k,
             per_step_top_k=self.cfg.top_k,
+            lm_head=lm_head,
         )
+        generation = gen_result["steps"]
+        per_token_ms = gen_result["per_token_ms"]
+        per_step_hidden_norms = gen_result["per_step_hidden_norms"]
+        per_step_top_ids = gen_result["per_step_top_ids"]
+        per_step_top_probs = gen_result["per_step_top_probs"]
+        eos_step_hidden_full = gen_result["eos_step_hidden_full"]
+        eos_step_top_rows = gen_result["eos_step_top_rows"]
+        eos_step_top_logits = gen_result["eos_step_top_logits"]
+        eos_step_top_tokens = gen_result["eos_step_top_tokens"]
         self._forward_calls += len(generation)
 
         # Detokenize the full generated response in one call so we don't lose
@@ -353,6 +370,10 @@ class Collector:
             per_step_hidden_norms=per_step_hidden_norms,
             per_step_top_ids=per_step_top_ids,
             per_step_top_probs=per_step_top_probs,
+            eos_step_hidden_full=eos_step_hidden_full,
+            eos_step_top_rows=eos_step_top_rows,
+            eos_step_top_logits=eos_step_top_logits,
+            eos_step_top_tokens=eos_step_top_tokens,
             timings=timings,
         )
 
@@ -506,17 +527,28 @@ def _generate(
     eos_ids: set[int],
     top_k_alts: int,
     per_step_top_k: int = 15,
-) -> tuple[list[dict[str, Any]], list[float], np.ndarray, np.ndarray, np.ndarray]:
+    lm_head: Any | None = None,
+) -> dict[str, Any]:
     """Autoregressive greedy generation with per-step capture.
 
     Each step pays an extra cost to request output_hidden_states — we use the
     residual-stream norms across layers to visualize how the representation
     evolves at every loop iteration.
 
-    Returns: (steps, per_token_ms,
-              per_step_hidden_norms (n_steps, n_layers+1),
-              per_step_top_ids      (n_steps, per_step_top_k),
-              per_step_top_probs    (n_steps, per_step_top_k))
+    When the model emits EOS and `stop_on_eos` is true, we additionally capture
+    the full hidden state at that moment plus the LM-head W-rows for the top-K
+    candidates — that lets the renderer show the exact matmul that produced
+    EOS as the winner. `lm_head` is the nn.Linear (or equivalent) used to
+    select rows lazily without materializing the full [vocab × hidden] matrix.
+    If not provided, the eos_step_* fields stay None.
+
+    Returns a dict with: steps, per_token_ms,
+                         per_step_hidden_norms (n_steps, n_layers+1),
+                         per_step_top_ids      (n_steps, per_step_top_k),
+                         per_step_top_probs    (n_steps, per_step_top_k),
+                         eos_step_hidden_full  (hidden_size,) | None,
+                         eos_step_top_rows     (per_step_top_k, hidden_size) | None,
+                         eos_step_top_logits   (per_step_top_k,) | None.
     """
     max_new = int(gen_params.get("max_new_tokens", 50))
     stop_on_eos = bool(gen_params.get("stop_on_eos", True))
@@ -527,6 +559,10 @@ def _generate(
     hidden_norms_rows: list[np.ndarray] = []
     top_ids_rows: list[np.ndarray] = []
     top_probs_rows: list[np.ndarray] = []
+    eos_step_hidden_full: np.ndarray | None = None
+    eos_step_top_rows: np.ndarray | None = None
+    eos_step_top_logits: np.ndarray | None = None
+    eos_step_top_tokens: list[str] | None = None
 
     for i in range(max_new):
         t0 = time.perf_counter()
@@ -534,6 +570,8 @@ def _generate(
             out = model(torch.tensor([current]), output_hidden_states=True)
         dt = (time.perf_counter() - t0) * 1000
         per_token_ms.append(round(dt, 1))
+
+        last_hidden_full = out.hidden_states[-1][0, -1].detach().float().numpy()
 
         # Residual stream norm at the last token across all layer outputs.
         layer_norms = np.array([
@@ -570,21 +608,40 @@ def _generate(
             "top_alts": top_alts,
         })
 
+        # Capture EOS-step LM-head matmul details — only on the step that
+        # actually ends the loop (the first EOS the model emits).
+        if is_eos and stop_on_eos and lm_head is not None and eos_step_hidden_full is None:
+            eos_step_hidden_full = last_hidden_full.astype(np.float32)
+            top_ids_tensor = torch.tensor([int(t) for t in top_k_idx])
+            eos_step_top_rows = (
+                lm_head.weight[top_ids_tensor]
+                .detach().to("cpu", torch.float32).numpy()
+            )
+            eos_step_top_logits = logits[top_k_idx].astype(np.float32)
+            eos_step_top_tokens = [tokenizer.decode([int(t)]) for t in top_k_idx]
+
         current.append(next_id)
         if is_eos and stop_on_eos:
             break
 
     # Stack per-step arrays. If no steps ran, return zero-row arrays.
     if not steps:
-        return steps, per_token_ms, \
-            np.zeros((0, 1), dtype=np.float32), \
-            np.zeros((0, per_step_top_k), dtype=np.int64), \
-            np.zeros((0, per_step_top_k), dtype=np.float32)
+        per_step_hidden_norms = np.zeros((0, 1), dtype=np.float32)
+        per_step_top_ids = np.zeros((0, per_step_top_k), dtype=np.int64)
+        per_step_top_probs = np.zeros((0, per_step_top_k), dtype=np.float32)
+    else:
+        per_step_hidden_norms = np.stack(hidden_norms_rows).astype(np.float32)
+        per_step_top_ids = np.stack(top_ids_rows).astype(np.int64)
+        per_step_top_probs = np.stack(top_probs_rows).astype(np.float32)
 
-    return (
-        steps,
-        per_token_ms,
-        np.stack(hidden_norms_rows).astype(np.float32),
-        np.stack(top_ids_rows).astype(np.int64),
-        np.stack(top_probs_rows).astype(np.float32),
-    )
+    return {
+        "steps": steps,
+        "per_token_ms": per_token_ms,
+        "per_step_hidden_norms": per_step_hidden_norms,
+        "per_step_top_ids": per_step_top_ids,
+        "per_step_top_probs": per_step_top_probs,
+        "eos_step_hidden_full": eos_step_hidden_full,
+        "eos_step_top_rows": eos_step_top_rows,
+        "eos_step_top_logits": eos_step_top_logits,
+        "eos_step_top_tokens": eos_step_top_tokens,
+    }

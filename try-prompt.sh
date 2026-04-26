@@ -64,12 +64,14 @@ done
 [[ -z "$PROMPT" ]] && error "no prompt given. Usage: ./try-prompt.sh \"your prompt\""
 
 # ── Resolve llm-trace ────────────────────────────────────────
-if command -v llm-trace >/dev/null 2>&1; then
-    LLM_TRACE=(llm-trace)
-elif command -v uv >/dev/null 2>&1 && [[ -d "$SCRIPT_DIR/.venv" ]]; then
+# Prefer the local .venv over a global install — guards against a stale
+# editable install elsewhere on PATH shadowing this repo's source.
+if command -v uv >/dev/null 2>&1 && [[ -d "$SCRIPT_DIR/.venv" ]]; then
     LLM_TRACE=(uv run llm-trace)
+elif command -v llm-trace >/dev/null 2>&1; then
+    LLM_TRACE=(llm-trace)
 else
-    error "llm-trace not on PATH and no uv .venv found. Run ./setup.sh first."
+    error "no local .venv and llm-trace not on PATH. Run ./setup.sh first."
 fi
 
 # ── Run ──────────────────────────────────────────────────────

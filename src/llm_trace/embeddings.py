@@ -23,6 +23,8 @@ from typing import Any
 
 import numpy as np
 
+from llm_trace.renderers._util import html_escape as _html_escape
+
 # ── Curated landmark tokens (semantic anchor groups) ──────────────────────
 # Each entry is a string with the leading-space variant — that's how GPT-2's
 # BPE tokenizer represents most words mid-sentence, and they'll be single
@@ -460,8 +462,3 @@ def _build_html(payload: dict[str, Any]) -> str:
     return (_HTML
             .replace("__DATA__", data_json)
             .replace("__MODEL__", _html_escape(payload["model_id"])))
-
-
-def _html_escape(s: str) -> str:
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-                   .replace(">", "&gt;").replace('"', "&quot;"))

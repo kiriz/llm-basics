@@ -26,15 +26,39 @@ import json
 from pathlib import Path
 from typing import Any
 
-
-def _short_model_slug(model_id: str) -> str:
-    last = model_id.rsplit("/", 1)[-1]
-    head = last.split("-", 1)[0].split(".", 1)[0]
-    slug = "".join(c.lower() if c.isalnum() else "_" for c in head).strip("_")
-    return slug or "model"
-
+from llm_trace.renderers._util import (
+    html_escape as _html_escape,
+)
+from llm_trace.renderers._util import (
+    short_model_slug as _short_model_slug,
+)
+from llm_trace.renderers._util import (
+    slug as _slug,
+)
 
 # ── Data shaping ───────────────────────────────────────────────────────────
+
+def _eos_capture_payload(trace) -> dict[str, Any] | None:
+    """Pack the EOS-step matmul snapshot for the renderer, or None if the
+    trace ended by hitting max_new_tokens (no EOS emitted)."""
+    if trace.eos_step_hidden_full is None:
+        return None
+    eos_steps = [s for s in trace.generation if s.get("is_eos")]
+    if not eos_steps:
+        return None
+    eos = eos_steps[0]
+    return {
+        "step": int(eos["step"]),
+        "token": eos["token"],
+        "id": int(eos["id"]),
+        "prob": float(eos["prob"]),
+        "hidden_full": trace.eos_step_hidden_full.tolist(),
+        "top_rows": trace.eos_step_top_rows.tolist(),
+        "top_logits": trace.eos_step_top_logits.tolist(),
+        "top_ids": [int(x) for x in trace.per_step_top_ids[int(eos["step"]) - 1].tolist()],
+        "top_tokens": list(trace.eos_step_top_tokens or []),
+    }
+
 
 def _build_payload(trace) -> dict[str, Any]:
     m = trace.model_meta or {}
@@ -93,6 +117,7 @@ def _build_payload(trace) -> dict[str, Any]:
         "hidden_last": trace.hidden_last.tolist(),
         "final_hidden_full": trace.final_hidden_full.tolist(),
         "lm_head_top_rows": trace.lm_head_top_rows.tolist(),
+        "eos_capture": _eos_capture_payload(trace),
         "logits_top": logits_top,
         "probs_top": probs_top,
         "loop_steps": per_step,
@@ -304,6 +329,26 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:
 .embed-row .vc{display:inline-block;width:46px;height:26px;border-radius:3px;
   font-family:var(--mono);font-size:10px;text-align:center;line-height:26px;
   font-weight:600;flex-shrink:0}
+
+/* ── Step 8: EOS-step capture panel ─────────────────────────── */
+.eos-panel{margin-top:18px;background:var(--surface);
+  border:1px solid rgba(255,107,107,0.4);border-radius:10px;overflow:hidden}
+.eos-panel summary{cursor:pointer;list-style:none;user-select:none;
+  padding:12px 16px;font-family:var(--mono);font-size:12px;color:var(--text);
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:linear-gradient(90deg,rgba(255,107,107,0.10),transparent)}
+.eos-panel summary::-webkit-details-marker{display:none}
+.eos-panel summary::before{content:'▶ ';color:#ff6b6b}
+.eos-panel[open] summary::before{content:'▼ '}
+.eos-panel summary b{color:var(--text)}
+.eos-panel .eos-pill{background:rgba(255,107,107,0.15);
+  border:1px solid rgba(255,107,107,0.6);color:#ff6b6b;
+  font-weight:700;padding:3px 10px;border-radius:4px;font-size:11px;
+  letter-spacing:.04em}
+.eos-panel .eos-tok{background:var(--surface3);color:#ff6b6b;
+  padding:2px 8px;border-radius:3px;border:1px solid rgba(255,107,107,0.4);
+  font-weight:700}
+.eos-panel .eos-body{padding:14px 16px;border-top:1px solid var(--border)}
 
 /* ── Step 5: LM head similarity-search ─────────────────────────── */
 .lm-frame{font-family:var(--mono);font-size:12.5px;color:var(--text);
@@ -1230,15 +1275,92 @@ function step_loop() {
         <span>avg: <b style="color:var(--teal)">${(totalMs/Math.max(steps.length,1)).toFixed(1)} ms/step</b></span>
         <span>${steps.some(s => s.is_eos) ? '<span style="color:#ff6b6b;font-weight:700">EOS emitted ✓</span>' : '<span style="color:var(--amber)">hit max_new_tokens (no EOS)</span>'}</span>
       </div>
+      ${eos_panel()}
     </div>
     <div class="step-code">
       <span class="label">⌥ inside the runtime · the autoregressive loop</span>
-      <pre class="code-body">${esc(`for step in range(max_new_tokens):
-    out = model(torch.tensor([current]))
+      <pre class="code-body">${esc(`for i in range(max_new):
+    out = model(torch.tensor([current]), output_hidden_states=True)
     next_id = int(out.logits[0, -1].argmax())
-    if next_id in eos_ids: break
-    current.append(next_id)`)}</pre>
+    is_eos = next_id in eos_ids
+    current.append(next_id)
+    if is_eos and stop_on_eos:
+        break`)}</pre>
+      <div class="code-link">source ·
+        <a href="https://github.com/kiriz/llm-basics/blob/main/src/llm_trace/collector.py#L515" target="_blank" rel="noopener">collector.py#L515</a>
+        <span class="dim">(_generate)</span>
+        ·
+        <a href="https://github.com/kiriz/llm-basics/blob/main/src/llm_trace/collector.py#L559" target="_blank" rel="noopener">L559</a>
+        <span class="dim">(loop body)</span>
+        — for the production equivalent (with KV cache, attention masks, sampling),
+        see HuggingFace's
+        <a href="https://github.com/huggingface/transformers/blob/v5.6.2/src/transformers/generation/utils.py" target="_blank" rel="noopener">generation/utils.py</a>.
+      </div>
     </div>
+  `;
+}
+
+function eos_panel() {
+  const cap = D.eos_capture;
+  if (!cap) return '';
+
+  const hidden = cap.hidden_full || [];
+  const rows = cap.top_rows || [];
+  const logits = cap.top_logits || [];
+  const tokens = cap.top_tokens || [];
+  const ids = cap.top_ids || [];
+  const hsize = D.model_meta.hidden_size;
+
+  const N = Math.min(3, rows.length);
+  const previewN = Math.min(16, hsize);
+  const candidates = rows.slice(0, N).map((row, i) => {
+    const tok = tokens[i] || '?';
+    const id  = ids[i] || 0;
+    const lg  = logits[i] || 0;
+    const cells = row.slice(0, previewN).map(vecCell).join('');
+    const fullCells = row.map(vecCell).join('');
+    const remain = row.length - previewN;
+    const isEos = (id === cap.id);
+    return `
+      <details class="lm-cand ${isEos ? 'winner' : ''}">
+        <summary>
+          <span class="lm-cand-rank">#${i+1}</span>
+          <span class="lm-cand-tok">${esc(tok)}</span>
+          <span class="lm-cand-id">id ${id}${isEos ? ' · EOS' : ''}</span>
+          <span class="lm-cand-cells">${cells}</span>
+          <span class="lm-cand-more">+ ${remain} more</span>
+          <span class="lm-cand-eq">⟨h, w⟩ =</span>
+          <span class="lm-cand-logit">${lg >= 0 ? '+' : ''}${lg.toFixed(2)}</span>
+        </summary>
+        <div class="lm-cand-full">${fullCells}</div>
+      </details>
+    `;
+  }).join('');
+
+  const hiddenMeta = `<span class="dim">EOS-step hidden state · </span><span class="id">${hsize}</span><span class="dim"> dims · the "query" at the moment of stopping</span>`;
+
+  return `
+    <details class="eos-panel" open>
+      <summary>
+        <span class="eos-pill">⏹ EOS step</span>
+        At step <b>${cap.step}</b>, the model emitted <span class="eos-tok">${esc(cap.token)}</span>
+        (id <b>${cap.id}</b>, prob <b>${(cap.prob*100).toFixed(1)}%</b>). Click to see how the
+        LM head matmul produced EOS as the winner.
+      </summary>
+      <div class="eos-body">
+        ${vectorRow(hiddenMeta, hidden)}
+        <div class="lm-divider">
+          <span class="lm-divider-arrow">↓</span>
+          dot product with W-rows for the top-${N} candidates at this step
+        </div>
+        <div class="lm-candidates">${candidates}</div>
+        <div class="note" style="margin-top:14px">
+          The dot product against <b>W[${cap.id}]</b> (the EOS row) scored
+          <b>${(logits[0] || 0).toFixed(2)}</b> — beating every other vocab token. After
+          this point the loop breaks; no Step 6/7 happens for what would be step ${cap.step+1}.
+        </div>
+      </div>
+    </details>
   `;
 }
 
@@ -1383,13 +1505,3 @@ def render(trace, cfg: dict[str, Any] | None = None, out_path: Path | str | None
             .replace("__TITLE__", _html_escape(title)))
     out_path.write_text(html, encoding="utf-8")
     return out_path
-
-
-def _html_escape(s: str) -> str:
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-                   .replace(">", "&gt;").replace('"', "&quot;"))
-
-
-def _slug(s: str, max_len: int = 40) -> str:
-    cleaned = "".join(c if c.isalnum() else "_" for c in s.strip())
-    return cleaned[:max_len].strip("_") or "x"

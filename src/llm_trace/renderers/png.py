@@ -16,6 +16,8 @@ from typing import Any
 
 import numpy as np
 
+from llm_trace.renderers._util import slug as _slug
+
 
 def _pca_2d(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Project rows to 2D via SVD. Returns (points, variance_ratios)."""
@@ -154,7 +156,7 @@ def render(trace, cfg: dict[str, Any] | None = None, out_path: Path | str | None
     if out_path is None:
         out_dir = Path((cfg or {}).get("out_dir", "./out"))
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{trace.model_id.replace('/', '_')}__{_slug(trace.prompt)}.png"
+        out_path = out_dir / f"{trace.model_id.replace('/', '_')}__{_slug(trace.prompt, max_len=32)}.png"
     out_path = Path(out_path)
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 11))
@@ -174,6 +176,3 @@ def render(trace, cfg: dict[str, Any] | None = None, out_path: Path | str | None
     return out_path
 
 
-def _slug(s: str, max_len: int = 32) -> str:
-    cleaned = "".join(c if c.isalnum() else "_" for c in s.strip())
-    return cleaned[:max_len].strip("_") or "prompt"

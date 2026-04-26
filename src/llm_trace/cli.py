@@ -237,9 +237,9 @@ def embeddings(
     if offline:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
     from llm_trace.embeddings import explore
-    from llm_trace.renderers.animated_v2 import _short_model_slug
+    from llm_trace.renderers._util import short_model_slug
     if out is None:
-        out = Path(f"out/embeddings_{_short_model_slug(model)}.html")
+        out = Path(f"out/embeddings_{short_model_slug(model)}.html")
     result = explore(
         model_id=model,
         prompt=prompt,

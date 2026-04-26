@@ -18,6 +18,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from llm_trace.renderers._util import html_escape as _html_escape
+from llm_trace.renderers._util import slug as _slug
+
 # ── Data shaping ──────────────────────────────────────────────────────────
 
 def _build_viz_data(trace) -> dict[str, Any]:
@@ -751,17 +754,3 @@ def _comparison_cell(model_id: str, prompt: str, trace) -> str:
     )
 
 
-# ── Utilities ──────────────────────────────────────────────────────────────
-
-def _html_escape(s: str) -> str:
-    return (str(s)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&#39;"))
-
-
-def _slug(s: str, max_len: int = 40) -> str:
-    cleaned = "".join(c if c.isalnum() else "_" for c in s.strip())
-    return cleaned[:max_len].strip("_") or "x"

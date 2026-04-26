@@ -92,6 +92,14 @@ class TraceData:
     per_step_top_ids: np.ndarray        # (n_steps, top_k) int64
     per_step_top_probs: np.ndarray      # (n_steps, top_k) float32
 
+    # EOS-step capture (optional). Populated only when the loop actually
+    # terminated by emitting EOS. Lets the renderer show the LM-head matmul
+    # at the moment the model decided to stop.
+    eos_step_hidden_full: np.ndarray | None    # (hidden_size,) float32 | None
+    eos_step_top_rows: np.ndarray | None       # (top_k, hidden_size) float32 | None
+    eos_step_top_logits: np.ndarray | None     # (top_k,) float32 | None
+    eos_step_top_tokens: list[str] | None      # decoded strings for top-K
+
     # Performance
     timings: dict[str, Any]
 
@@ -116,6 +124,10 @@ class TraceData:
         }
         if self.embeddings_pos is not None:
             arrays["embeddings_pos"] = self.embeddings_pos
+        if self.eos_step_hidden_full is not None:
+            arrays["eos_step_hidden_full"] = self.eos_step_hidden_full
+            arrays["eos_step_top_rows"] = self.eos_step_top_rows
+            arrays["eos_step_top_logits"] = self.eos_step_top_logits
         for key, arr in self.attentions.items():
             arrays[f"attn__{key}"] = arr
 
@@ -135,6 +147,8 @@ class TraceData:
             "generation_text": self.generation_text,
             "timings": self.timings,
             "has_embeddings_pos": self.embeddings_pos is not None,
+            "has_eos_step": self.eos_step_hidden_full is not None,
+            "eos_step_top_tokens": self.eos_step_top_tokens,
         }
         return arrays, meta
 
@@ -176,5 +190,9 @@ class TraceData:
             per_step_hidden_norms=arrays["per_step_hidden_norms"],
             per_step_top_ids=arrays["per_step_top_ids"],
             per_step_top_probs=arrays["per_step_top_probs"],
+            eos_step_hidden_full=arrays.get("eos_step_hidden_full") if meta.get("has_eos_step") else None,
+            eos_step_top_rows=arrays.get("eos_step_top_rows") if meta.get("has_eos_step") else None,
+            eos_step_top_logits=arrays.get("eos_step_top_logits") if meta.get("has_eos_step") else None,
+            eos_step_top_tokens=meta.get("eos_step_top_tokens"),
             timings=meta["timings"],
         )

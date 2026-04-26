@@ -24,7 +24,11 @@ def _fresh_import_check(module: str) -> subprocess.CompletedProcess:
     script = textwrap.dedent(f"""
         import sys
         import {module}  # noqa: F401
-        banned = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.'))
+        banned_roots = ('torch', 'transformers', 'tokenizers')
+        banned = sorted(
+            m for m in sys.modules
+            if m in banned_roots or any(m.startswith(r + '.') for r in banned_roots)
+        )
         assert not banned, f'banned modules pulled in: {{banned[:5]}}'
     """)
     env = dict(os.environ)
@@ -106,6 +110,10 @@ def _fake_trace():
         per_step_hidden_norms=np.array([[1.0, 5.0, 12.0], [1.1, 5.5, 13.2]], dtype=np.float32),
         per_step_top_ids=np.array([[10, 20, 30], [20, 10, 30]], dtype=np.int64),
         per_step_top_probs=np.array([[0.5, 0.3, 0.1], [0.4, 0.35, 0.08]], dtype=np.float32),
+        eos_step_hidden_full=None,
+        eos_step_top_rows=None,
+        eos_step_top_logits=None,
+        eos_step_top_tokens=None,
         timings={"model_load_ms": 1.0, "first_forward_ms": 2.0, "per_token_ms": [3.0, 3.0]},
     )
 
