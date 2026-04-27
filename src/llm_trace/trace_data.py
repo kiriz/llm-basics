@@ -14,6 +14,42 @@ import numpy as np
 
 
 @dataclass(frozen=True, slots=True)
+class BlockDeepDive:
+    """Captured intermediates for ONE chosen (layer, head) of a transformer block.
+
+    Powers the standalone "inside one block" deep-dive renderer. All arrays are
+    float32; the chosen head is sliced out of the full QKV (so `q/k/v/context`
+    are head_dim wide, not n_heads*head_dim).
+
+    Sequence length matches the prompt that was forwarded; `block_output` for
+    layer L equals the residual-stream input to layer L+1.
+    """
+    layer_index: int
+    head_index: int
+    n_heads: int
+    head_dim: int
+    activation: str               # 'gelu' | 'silu' | 'gelu_new'
+    has_swiglu_gate: bool         # True for Llama-family (gate_proj * silu(up_proj))
+
+    pre_ln1: np.ndarray           # (seq, hidden) — block input = residual stream
+    post_ln1: np.ndarray          # (seq, hidden)
+    q: np.ndarray                 # (seq, head_dim)  — chosen head
+    k: np.ndarray                 # (seq, head_dim)
+    v: np.ndarray                 # (seq, head_dim)
+    scores: np.ndarray            # (seq, seq) pre-softmax post-mask
+    weights: np.ndarray           # (seq, seq) post-softmax (== HF attentions[L,B,H])
+    context: np.ndarray           # (seq, head_dim) weights @ V
+    attn_output: np.ndarray       # (seq, hidden) after o_proj (full multi-head merged)
+    post_attn_residual: np.ndarray  # (seq, hidden) = pre_ln1 + attn_output
+    post_ln2: np.ndarray          # (seq, hidden)
+    ffn_pre_act: np.ndarray       # (seq, ffn_dim) — pre-activation up_proj output
+    ffn_post_act: np.ndarray      # (seq, ffn_dim) — post-activation
+    ffn_gate: np.ndarray | None   # (seq, ffn_dim) for SwiGLU; None for GPT-2-style
+    ffn_output: np.ndarray        # (seq, hidden) — post down_proj
+    block_output: np.ndarray      # (seq, hidden) = post_attn_residual + ffn_output
+
+
+@dataclass(frozen=True, slots=True)
 class TraceData:
     """One cell of a (model × prompt) matrix. Fully self-describing — a cached
     trace can be re-rendered without re-reading trace.yaml.
@@ -100,6 +136,11 @@ class TraceData:
     eos_step_top_logits: np.ndarray | None     # (top_k,) float32 | None
     eos_step_top_tokens: list[str] | None      # decoded strings for top-K
 
+    # Optional: full inner-state capture for one chosen (layer, head) of one
+    # transformer block. Powers the "inside one block" deep-dive renderer.
+    # None when block_deepdive collection is disabled in config.
+    block_deepdive: BlockDeepDive | None
+
     # Performance
     timings: dict[str, Any]
 
@@ -128,6 +169,17 @@ class TraceData:
             arrays["eos_step_hidden_full"] = self.eos_step_hidden_full
             arrays["eos_step_top_rows"] = self.eos_step_top_rows
             arrays["eos_step_top_logits"] = self.eos_step_top_logits
+        if self.block_deepdive is not None:
+            bd = self.block_deepdive
+            for k in (
+                "pre_ln1", "post_ln1", "q", "k", "v",
+                "scores", "weights", "context",
+                "attn_output", "post_attn_residual", "post_ln2",
+                "ffn_pre_act", "ffn_post_act", "ffn_output", "block_output",
+            ):
+                arrays[f"bd__{k}"] = getattr(bd, k)
+            if bd.ffn_gate is not None:
+                arrays["bd__ffn_gate"] = bd.ffn_gate
         for key, arr in self.attentions.items():
             arrays[f"attn__{key}"] = arr
 
@@ -149,7 +201,18 @@ class TraceData:
             "has_embeddings_pos": self.embeddings_pos is not None,
             "has_eos_step": self.eos_step_hidden_full is not None,
             "eos_step_top_tokens": self.eos_step_top_tokens,
+            "has_block_deepdive": self.block_deepdive is not None,
         }
+        if self.block_deepdive is not None:
+            bd = self.block_deepdive
+            meta["block_deepdive_meta"] = {
+                "layer_index": bd.layer_index,
+                "head_index": bd.head_index,
+                "n_heads": bd.n_heads,
+                "head_dim": bd.head_dim,
+                "activation": bd.activation,
+                "has_swiglu_gate": bd.has_swiglu_gate,
+            }
         return arrays, meta
 
     @classmethod
@@ -194,5 +257,38 @@ class TraceData:
             eos_step_top_rows=arrays.get("eos_step_top_rows") if meta.get("has_eos_step") else None,
             eos_step_top_logits=arrays.get("eos_step_top_logits") if meta.get("has_eos_step") else None,
             eos_step_top_tokens=meta.get("eos_step_top_tokens"),
+            block_deepdive=_load_block_deepdive(arrays, meta),
             timings=meta["timings"],
         )
+
+
+def _load_block_deepdive(
+    arrays: dict[str, np.ndarray], meta: dict[str, Any]
+) -> BlockDeepDive | None:
+    if not meta.get("has_block_deepdive"):
+        return None
+    bm = meta["block_deepdive_meta"]
+    return BlockDeepDive(
+        layer_index=int(bm["layer_index"]),
+        head_index=int(bm["head_index"]),
+        n_heads=int(bm["n_heads"]),
+        head_dim=int(bm["head_dim"]),
+        activation=str(bm["activation"]),
+        has_swiglu_gate=bool(bm["has_swiglu_gate"]),
+        pre_ln1=arrays["bd__pre_ln1"],
+        post_ln1=arrays["bd__post_ln1"],
+        q=arrays["bd__q"],
+        k=arrays["bd__k"],
+        v=arrays["bd__v"],
+        scores=arrays["bd__scores"],
+        weights=arrays["bd__weights"],
+        context=arrays["bd__context"],
+        attn_output=arrays["bd__attn_output"],
+        post_attn_residual=arrays["bd__post_attn_residual"],
+        post_ln2=arrays["bd__post_ln2"],
+        ffn_pre_act=arrays["bd__ffn_pre_act"],
+        ffn_post_act=arrays["bd__ffn_post_act"],
+        ffn_gate=arrays.get("bd__ffn_gate"),
+        ffn_output=arrays["bd__ffn_output"],
+        block_output=arrays["bd__block_output"],
+    )

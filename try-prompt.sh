@@ -36,7 +36,7 @@ PROMPT=""
 MODEL="distilgpt2"
 MAX=20
 SYSTEM=""
-RENDERERS='["terminal","animated_v3"]'
+RENDERERS='["terminal","animated_v3","inside_block"]'
 STOP_ON_EOS="true"
 
 # ── Argparse ─────────────────────────────────────────────────

@@ -119,6 +119,33 @@
 
   </div>
 
+  <div class="section-title">Inside one transformer block</div>
+  <div class="grid">
+
+    <a class="card" href="inside-one-block-distilgpt2.html">
+      <div class="tag">NEW · 6 substeps · 1 layer · 1 head</div>
+      <h3>distilgpt2 · attention head + FFN</h3>
+      <div class="who">layer 3 / head 0 — prompt: "January, February, March,"</div>
+      <p class="desc">
+        Zoom into <b style="color:var(--text)">one</b> transformer block. Watch a real
+        attention head compute Q · K&#8209;transpose, morph through softmax, then mix V.
+        Then the FFN expands 768 → 3072, applies GELU, contracts back. Real numbers, animated.
+      </p>
+    </a>
+
+    <a class="card amber" href="inside-one-block-tinyllama.html">
+      <div class="tag">NEW · 6 substeps · 1 layer · 1 head</div>
+      <h3>TinyLlama · attention head + FFN (SwiGLU)</h3>
+      <div class="who">layer 11 / head 0 — prompt: "Name three primary colors."</div>
+      <p class="desc">
+        Same deep-dive on TinyLlama. Bigger numbers (2048 → 5632 SwiGLU FFN),
+        grouped-query attention (32 query heads, 4 KV heads), the SiLU
+        activation curve. RoPE rotation explained for the chosen head.
+      </p>
+    </a>
+
+  </div>
+
   <div class="section-title">Embedding-space explorer</div>
   <div class="grid">
 

@@ -41,11 +41,51 @@ def _fresh_import_check(module: str) -> subprocess.CompletedProcess:
 @pytest.mark.parametrize("module", ["llm_trace.renderers.terminal",
                                      "llm_trace.renderers.png",
                                      "llm_trace.renderers.html",
-                                     "llm_trace.renderers.animated_v3"])
+                                     "llm_trace.renderers.animated_v3",
+                                     "llm_trace.renderers.inside_block"])
 def test_renderer_import_does_not_require_torch(module: str) -> None:
     result = _fresh_import_check(module)
     assert result.returncode == 0, (
         f"{module} pulled torch on import:\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+
+
+def _fake_block_deepdive(seq=3, hidden=8, head_dim=4, ffn_dim=16, n_heads=2):
+    """Build a BlockDeepDive shaped like real capture, with random data."""
+    from llm_trace.trace_data import BlockDeepDive
+
+    rng = np.random.RandomState(7)
+    weights = rng.rand(seq, seq).astype(np.float32)
+    weights = np.tril(weights)
+    row_sums = weights.sum(axis=-1, keepdims=True)
+    row_sums[row_sums == 0] = 1
+    weights = weights / row_sums  # rows sum to 1
+    log_w = np.log(np.clip(weights, 1e-12, 1.0))
+    mask = np.triu(np.ones_like(weights, dtype=bool), k=1)
+    scores = np.where(mask, -np.inf, log_w).astype(np.float32)
+    return BlockDeepDive(
+        layer_index=2,
+        head_index=0,
+        n_heads=n_heads,
+        head_dim=head_dim,
+        activation="gelu_new",
+        has_swiglu_gate=False,
+        pre_ln1=rng.rand(seq, hidden).astype(np.float32),
+        post_ln1=rng.rand(seq, hidden).astype(np.float32),
+        q=rng.rand(seq, head_dim).astype(np.float32),
+        k=rng.rand(seq, head_dim).astype(np.float32),
+        v=rng.rand(seq, head_dim).astype(np.float32),
+        scores=scores,
+        weights=weights,
+        context=rng.rand(seq, head_dim).astype(np.float32),
+        attn_output=rng.rand(seq, hidden).astype(np.float32),
+        post_attn_residual=rng.rand(seq, hidden).astype(np.float32),
+        post_ln2=rng.rand(seq, hidden).astype(np.float32),
+        ffn_pre_act=rng.rand(seq, ffn_dim).astype(np.float32),
+        ffn_post_act=rng.rand(seq, ffn_dim).astype(np.float32),
+        ffn_gate=None,
+        ffn_output=rng.rand(seq, hidden).astype(np.float32),
+        block_output=rng.rand(seq, hidden).astype(np.float32),
     )
 
 
@@ -112,6 +152,7 @@ def _fake_trace():
         eos_step_top_rows=None,
         eos_step_top_logits=None,
         eos_step_top_tokens=None,
+        block_deepdive=None,
         timings={"model_load_ms": 1.0, "first_forward_ms": 2.0, "per_token_ms": [3.0, 3.0]},
     )
 
@@ -193,3 +234,33 @@ def test_html_comparison_grid_lays_out_traces(tmp_path: Path):
     assert "fake-model" in text
     assert "other-model" in text
     assert 'grid-template-columns: repeat(1' in text  # one unique prompt
+
+
+def test_inside_block_renders_no_data_when_missing(tmp_path: Path):
+    from llm_trace.renderers import inside_block
+    tr = _fake_trace()  # has block_deepdive=None
+    out = inside_block.render(tr, out_path=tmp_path / "noblock.html")
+    text = out.read_text()
+    assert "No block deep-dive data" in text
+
+
+def test_inside_block_renders_data_driven_html(tmp_path: Path):
+    from llm_trace.renderers import inside_block
+    tr = _fake_trace()
+    object.__setattr__(tr, "block_deepdive", _fake_block_deepdive())
+    out = inside_block.render(tr, out_path=tmp_path / "block.html")
+    text = out.read_text()
+    # Spot-check the HTML/JS landmarks
+    assert "<html" in text
+    assert "const D =" in text
+    assert "INSIDE ONE BLOCK" in text
+    assert "step 1 / 6" in text
+    # Payload was injected and contains the block deep-dive
+    import json as _json
+    import re
+    m = re.search(r'const D = (\{.*?\});', text, re.DOTALL)
+    assert m is not None
+    payload = _json.loads(m.group(1).replace(r'<\/', '</'))
+    assert payload["block"]["layer_index"] == 2
+    assert payload["block"]["head_index"] == 0
+    assert payload["block"]["seq_len"] == 3

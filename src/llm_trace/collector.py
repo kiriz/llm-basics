@@ -22,6 +22,7 @@ Nothing outside this module imports torch via `llm_trace`.
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +33,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_trace import cache
-from llm_trace.trace_data import TraceData  # re-exported below
+from llm_trace.trace_data import BlockDeepDive, TraceData  # re-exported below
 
 __all__ = ["CollectionConfig", "LoadedModel", "TraceData", "Collector", "load_model"]
 
@@ -54,6 +55,10 @@ class CollectionConfig:
     top_k: int = 15
     extra_temps_for_viz: tuple[float, ...] = (0.1, 0.7, 1.5)
     generation_top_k: int = 5   # how many alternatives to record per gen step
+    # Block deep-dive: capture all intermediates for one chosen (layer, head).
+    block_deepdive_enabled: bool = True
+    block_deepdive_layer: int | str = "mid"   # int (0-based) or "mid"
+    block_deepdive_head: int = 0
 
 
 # ── Loaded model bundle ────────────────────────────────────────────────────
@@ -334,6 +339,16 @@ class Collector:
         generation_text = tokenizer.decode(gen_ids_for_text, skip_special_tokens=True) \
             if gen_ids_for_text else ""
 
+        # ── Block deep-dive: capture all intermediates for one (layer, head) ──
+        block_deepdive = _capture_block_deepdive(
+            model,
+            token_ids_list,
+            self.cfg,
+            n_layers=int(loaded.arch_info.get("n_layer") or 0),
+        )
+        if block_deepdive is not None:
+            self._forward_calls += 1
+
         timings = {
             "model_load_ms": loaded.arch_info.get("load_ms"),
             "first_forward_ms": round(first_forward_ms, 1),
@@ -374,6 +389,7 @@ class Collector:
             eos_step_top_rows=eos_step_top_rows,
             eos_step_top_logits=eos_step_top_logits,
             eos_step_top_tokens=eos_step_top_tokens,
+            block_deepdive=block_deepdive,
             timings=timings,
         )
 
@@ -381,6 +397,196 @@ class Collector:
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 _BASE_MODEL_SYSTEM_WARNED = False
+
+
+def _capture_block_deepdive(
+    model,
+    token_ids: list[int],
+    cfg: CollectionConfig,
+    n_layers: int,
+) -> BlockDeepDive | None:
+    """Capture all intermediates inside ONE chosen transformer block.
+
+    Runs an extra forward pass with PyTorch hooks installed on the chosen
+    block's submodules. Supports GPT-2 family (model.transformer.h[L]) and
+    Llama family (model.model.layers[L]). Returns None for unrecognized
+    architectures or when block_deepdive is disabled in config.
+
+    Cost: one extra forward pass on the prompt (typically 50-500ms).
+    Storage: ~700 KB-1.5 MB per cell depending on hidden_size and ffn_dim.
+    """
+    if not cfg.block_deepdive_enabled:
+        return None
+
+    layer_choice = cfg.block_deepdive_layer
+    layer_idx = (n_layers // 2) if layer_choice == "mid" else int(layer_choice)
+    head_idx = int(cfg.block_deepdive_head)
+
+    # Resolve block + submodules per architecture
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        block = model.transformer.h[layer_idx]
+        ln1, ln2 = block.ln_1, block.ln_2
+        attn, mlp = block.attn, block.mlp
+        is_gpt2 = True
+        has_swiglu = False
+        activation_name = "gelu_new"
+    elif hasattr(model, "model") and hasattr(model.model, "layers"):
+        block = model.model.layers[layer_idx]
+        ln1, ln2 = block.input_layernorm, block.post_attention_layernorm
+        attn, mlp = block.self_attn, block.mlp
+        is_gpt2 = False
+        has_swiglu = hasattr(mlp, "gate_proj")
+        activation_name = "silu" if has_swiglu else "gelu"
+    else:
+        # Architecture not recognized — skip capture
+        return None
+
+    captures: dict[str, Any] = {}
+
+    def grab(name: str):
+        def hook(_mod, _input, output):
+            captures[name] = (
+                output.detach() if isinstance(output, torch.Tensor)
+                else output[0].detach()
+            )
+        return hook
+
+    handles = [
+        ln1.register_forward_hook(grab("post_ln1")),
+        ln2.register_forward_hook(grab("post_ln2")),
+        block.register_forward_hook(grab("block_output")),
+    ]
+    if is_gpt2:
+        handles += [
+            attn.c_attn.register_forward_hook(grab("c_attn")),
+            attn.c_proj.register_forward_hook(grab("attn_output")),
+            mlp.c_fc.register_forward_hook(grab("ffn_pre_act")),
+            mlp.c_proj.register_forward_hook(grab("ffn_output")),
+        ]
+        if hasattr(mlp, "act"):
+            handles.append(mlp.act.register_forward_hook(grab("ffn_post_act")))
+    else:
+        handles += [
+            attn.q_proj.register_forward_hook(grab("q_proj_out")),
+            attn.k_proj.register_forward_hook(grab("k_proj_out")),
+            attn.v_proj.register_forward_hook(grab("v_proj_out")),
+            attn.o_proj.register_forward_hook(grab("attn_output")),
+            mlp.up_proj.register_forward_hook(grab("ffn_pre_act")),
+            mlp.down_proj.register_forward_hook(grab("ffn_output")),
+        ]
+        if has_swiglu:
+            handles.append(mlp.gate_proj.register_forward_hook(grab("ffn_gate")))
+
+    inp = torch.tensor([token_ids])
+    try:
+        with torch.no_grad():
+            out = model(inp, output_hidden_states=True, output_attentions=True)
+    finally:
+        for h in handles:
+            h.remove()
+
+    cfg_obj = model.config
+    n_heads = (
+        getattr(cfg_obj, "num_attention_heads", None)
+        or getattr(cfg_obj, "n_head", None)
+    )
+    # Llama-family uses grouped-query attention: K, V have fewer heads than Q.
+    n_kv_heads = getattr(cfg_obj, "num_key_value_heads", None) or n_heads
+    hidden = (
+        getattr(cfg_obj, "hidden_size", None)
+        or getattr(cfg_obj, "n_embd", None)
+    )
+    head_dim = hidden // n_heads
+
+    # pre_ln1 = block input = output of layer L-1 (or embedding for L=0)
+    pre_ln1 = out.hidden_states[layer_idx][0].detach().float().numpy()  # (seq, hidden)
+
+    # Q, K, V — all heads, then index the chosen head
+    if is_gpt2:
+        qkv_t = captures["c_attn"][0]  # (seq, 3*hidden)
+        Q_t, K_t, V_t = qkv_t.split(hidden, dim=-1)
+        kv_heads_for_reshape = n_heads
+    else:
+        Q_t = captures["q_proj_out"][0]
+        K_t = captures["k_proj_out"][0]   # (seq, n_kv_heads * head_dim) for GQA
+        V_t = captures["v_proj_out"][0]
+        kv_heads_for_reshape = n_kv_heads
+
+    Q_all = Q_t.view(-1, n_heads, head_dim).transpose(0, 1).contiguous()
+    K_all = K_t.view(-1, kv_heads_for_reshape, head_dim).transpose(0, 1).contiguous()
+    V_all = V_t.view(-1, kv_heads_for_reshape, head_dim).transpose(0, 1).contiguous()
+    # Map query-head index to its corresponding KV-head (GQA grouping).
+    kv_idx = head_idx // (n_heads // kv_heads_for_reshape) if kv_heads_for_reshape else head_idx
+    Qh = Q_all[head_idx].detach().float().numpy().astype(np.float32)
+    Kh = K_all[kv_idx].detach().float().numpy().astype(np.float32)
+    Vh = V_all[kv_idx].detach().float().numpy().astype(np.float32)
+
+    # Weights from HF (post-RoPE for Llama, post-softmax for both)
+    weights = (
+        out.attentions[layer_idx][0, head_idx]
+        .detach().float().numpy().astype(np.float32)
+    )
+    # Scores: derive from log(weights). For GPT-2 this matches Q·K^T/sqrt(d_k) up
+    # to a constant; for Llama it's the post-RoPE equivalent (so softmax(scores)
+    # exactly reproduces weights, which is the pedagogical guarantee viewers
+    # need for the morph animation in substep 3).
+    eps = 1e-12
+    log_w = np.log(np.clip(weights, eps, 1.0))
+    # Mask above diagonal: HF puts 0 there for causal models; we set -inf to make
+    # the mask visible in the heatmap.
+    mask = np.triu(np.ones_like(weights, dtype=bool), k=1)
+    scores = np.where(mask, -np.inf, log_w).astype(np.float32)
+
+    context = (weights @ Vh).astype(np.float32)
+    attn_output = captures["attn_output"][0].detach().float().numpy().astype(np.float32)
+    post_ln1 = captures["post_ln1"][0].detach().float().numpy().astype(np.float32)
+    post_attn_residual = (pre_ln1 + attn_output).astype(np.float32)
+    post_ln2 = captures["post_ln2"][0].detach().float().numpy().astype(np.float32)
+
+    # FFN intermediates
+    ffn_pre_act_t = captures["ffn_pre_act"][0]
+    ffn_gate = None
+    if is_gpt2:
+        if "ffn_post_act" in captures:
+            ffn_post_act_t = captures["ffn_post_act"][0]
+        else:
+            # Fallback: NewGELU manually
+            x = ffn_pre_act_t
+            ffn_post_act_t = 0.5 * x * (
+                1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * x ** 3))
+            )
+    else:
+        if has_swiglu:
+            gate_t = captures["ffn_gate"][0]
+            ffn_post_act_t = torch.nn.functional.silu(gate_t) * ffn_pre_act_t
+            ffn_gate = gate_t.detach().float().numpy().astype(np.float32)
+        else:
+            ffn_post_act_t = torch.nn.functional.silu(ffn_pre_act_t)
+
+    return BlockDeepDive(
+        layer_index=layer_idx,
+        head_index=head_idx,
+        n_heads=int(n_heads),
+        head_dim=int(head_dim),
+        activation=activation_name,
+        has_swiglu_gate=has_swiglu,
+        pre_ln1=pre_ln1.astype(np.float32),
+        post_ln1=post_ln1,
+        q=Qh,
+        k=Kh,
+        v=Vh,
+        scores=scores,
+        weights=weights,
+        context=context,
+        attn_output=attn_output,
+        post_attn_residual=post_attn_residual,
+        post_ln2=post_ln2,
+        ffn_pre_act=ffn_pre_act_t.detach().float().numpy().astype(np.float32),
+        ffn_post_act=ffn_post_act_t.detach().float().numpy().astype(np.float32),
+        ffn_gate=ffn_gate,
+        ffn_output=captures["ffn_output"][0].detach().float().numpy().astype(np.float32),
+        block_output=captures["block_output"][0].detach().float().numpy().astype(np.float32),
+    )
 
 
 def _resolve_prompt(

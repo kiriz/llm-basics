@@ -23,7 +23,7 @@ from typing import Any
 
 import numpy as np
 
-CACHE_VERSION = "v8"   # v8: + EOS-step capture (hidden + top-K W rows + logits)
+CACHE_VERSION = "v9"   # v9: + block_deepdive capture (one-block intermediates)
 
 
 def cache_key(model_id: str, templated_prompt: str, gen_params: dict[str, Any]) -> str:

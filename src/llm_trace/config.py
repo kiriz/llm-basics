@@ -35,6 +35,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "hidden_dims_keep": 32,
         "top_k": 15,
         "generation_top_k": 5,
+        "block_deepdive": {
+            # Capture all intermediates (Q,K,V,scores,FFN,...) for one chosen
+            # (layer, head). Powers the standalone "inside one block" demo.
+            # Set enabled=false to skip and save ~1 MB per cache cell.
+            "enabled": True,
+            "layer": "mid",     # int (0-based) or "mid" → n_layers // 2
+            "head": 0,
+        },
     },
     "renderers": ["terminal"],
     "out_dir": "./out",
@@ -119,6 +127,7 @@ def collection_config_from(cfg: dict[str, Any]):
             return v
         return tuple(int(x) for x in v)
 
+    bd = col.get("block_deepdive") or {}
     return CollectionConfig(
         attention_layers=_as_indices(attn.get("layers"), (0,)),
         attention_heads=_as_indices(attn.get("heads"), "all"),
@@ -126,6 +135,9 @@ def collection_config_from(cfg: dict[str, Any]):
         top_k=int(col.get("top_k", 15)),
         extra_temps_for_viz=tuple(gen.get("extra_temps_for_viz", [0.1, 0.7, 1.5])),
         generation_top_k=int(col.get("generation_top_k", 5)),
+        block_deepdive_enabled=bool(bd.get("enabled", True)),
+        block_deepdive_layer=bd.get("layer", "mid"),  # int or "mid"
+        block_deepdive_head=int(bd.get("head", 0)),
     )
 
 
