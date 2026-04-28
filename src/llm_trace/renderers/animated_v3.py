@@ -900,7 +900,10 @@ function step_layers() {
   // the state after each transformer block. Last row is post-final-LN
   // (this is what the LM head actually reads).
   const hl = D.hidden_last || [];
-  const dimsKept = hl.length ? hl[0].length : 0;
+  const dimsAvailable = hl.length ? hl[0].length : 0;
+  // Cap displayed cells so the residual-norm bar on the right stays visible
+  // on a typical laptop viewport without horizontal scroll.
+  const dimsKept = Math.min(24, dimsAvailable);
   const totalRows = hl.length;     // n_layer + 1, possibly +1 if final LN added
 
   // Norm of the last token at each layer — comes from the last column of
@@ -928,7 +931,7 @@ function step_layers() {
   }
 
   const rowsHtml = hl.map((vec, idx) => {
-    const cells = vec.map(heatCell).join('');
+    const cells = vec.slice(0, dimsKept).map(heatCell).join('');
     const normPct = (norms[idx] / normMax) * 100;
     return `
       <div class="layer-row ${rowClass(idx)}">
