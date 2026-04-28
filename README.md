@@ -10,6 +10,8 @@ Hosted on GitHub Pages: **https://kiriz.github.io/llm-basics/**
 
 - **[distilgpt2 — "January, February, March,"](https://kiriz.github.io/llm-basics/distilgpt2-january-february-march.html)** — 6-layer GPT-2 base model completing a sequence
 - **[TinyLlama — "Name three primary colors."](https://kiriz.github.io/llm-basics/tinyllama-name-three-primary-colors.html)** — 22-layer chat-tuned Llama answering a question
+- **[Inside one transformer block (distilgpt2)](https://kiriz.github.io/llm-basics/inside-one-block-distilgpt2.html)** — 6-substep deep-dive: LN1 → Q/K/V → scores → softmax → FFN
+- **[Inside one transformer block (TinyLlama)](https://kiriz.github.io/llm-basics/inside-one-block-tinyllama.html)** — same, on the larger Llama-family architecture (SwiGLU, GQA)
 - **[Embedding-space scatter (distilgpt2)](https://kiriz.github.io/llm-basics/embeddings-distilgpt2.html)** — PCA projection of all 50,257 vocab tokens
 - **[Embedding-space scatter (TinyLlama)](https://kiriz.github.io/llm-basics/embeddings-tinyllama.html)** — same, for TinyLlama's 32,000 vocab
 
@@ -46,6 +48,26 @@ Step 8 — **the autoregressive loop**. 138 generated tokens (TinyLlama answerin
 Step 8, expanded — **the matmul that emits EOS**. At step 138 the model picked `</s>` (logit +16.59) over `They` (+15.80) and `The` (+13.40). Click any candidate row to see all 2048 dims of the W-row that made it the winner.
 
 ![EOS-step LM head matmul](docs/screenshots/04-eos-step-matmul.png)
+
+## Inside one transformer block
+
+A separate 6-substep slideshow opens up the box at step 4 — one chosen `(layer, head)`, all the actual numbers, animated. Live: [distilgpt2](https://kiriz.github.io/llm-basics/inside-one-block-distilgpt2.html) · [TinyLlama](https://kiriz.github.io/llm-basics/inside-one-block-tinyllama.html).
+
+Step 1 — **LayerNorm + Q/K/V projection**. The block input vector gets normalized, then split into three vectors of width `head_dim` for the chosen head.
+
+![Q K V projection](docs/screenshots/05-deepdive-qkv.png)
+
+Step 2 — **scores Q · Kᵀ**. Every (query, key) pair gets a dot product. Cells fill row-by-row in a stagger animation; upper-triangle is masked (causal). 20 tokens × 20 keys = 400 dot products, only 210 unmasked.
+
+![Q K^T scores matrix](docs/screenshots/06-deepdive-scores.png)
+
+Step 3 — **softmax morph**. The scores row for the spotlighted query token morphs through three stages: raw scores (some negative) → `e^x` (all positive) → divide by Σ (probabilities sum to 1).
+
+![Softmax morph final stage](docs/screenshots/07-deepdive-softmax.png)
+
+Step 5 — **FFN expand + activation**. The post-attention residual goes through LN2, then a linear up_proj from `hidden_size` to `ffn_dim` (here 2048 → 5632, **2.75× wider**). Each cell passes through the activation curve (SiLU for Llama, GELU for GPT-2).
+
+![FFN expand to 5632 dims](docs/screenshots/08-deepdive-ffn-expand.png)
 
 ## Run it locally
 
