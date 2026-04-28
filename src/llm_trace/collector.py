@@ -399,6 +399,22 @@ class Collector:
 _BASE_MODEL_SYSTEM_WARNED = False
 
 
+def _apply_activation(t: torch.Tensor, name: str) -> torch.Tensor:
+    """Apply the named activation. Mirrors HF's `ACT2FN` for the activations
+    we hit in practice (silu/swish, gelu_new/gelu_pytorch_tanh, gelu)."""
+    n = (name or "").lower()
+    if n in ("silu", "swish"):
+        return torch.nn.functional.silu(t)
+    if n in ("gelu_new", "gelu_pytorch_tanh"):
+        return 0.5 * t * (
+            1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (t + 0.044715 * t ** 3))
+        )
+    if n == "gelu":
+        return torch.nn.functional.gelu(t)
+    # Unknown — default to SiLU (most modern Llama-family choice).
+    return torch.nn.functional.silu(t)
+
+
 def _capture_block_deepdive(
     model,
     token_ids: list[int],
@@ -429,17 +445,26 @@ def _capture_block_deepdive(
         attn, mlp = block.attn, block.mlp
         is_gpt2 = True
         has_swiglu = False
-        activation_name = "gelu_new"
     elif hasattr(model, "model") and hasattr(model.model, "layers"):
         block = model.model.layers[layer_idx]
         ln1, ln2 = block.input_layernorm, block.post_attention_layernorm
         attn, mlp = block.self_attn, block.mlp
         is_gpt2 = False
         has_swiglu = hasattr(mlp, "gate_proj")
-        activation_name = "silu" if has_swiglu else "gelu"
+        if not has_swiglu:
+            # Current Llama-family configs all ship SwiGLU; no path here yet.
+            return None
     else:
         # Architecture not recognized — skip capture
         return None
+
+    # Read the actual activation from config so the recorded `activation` and
+    # the function we apply to FFN intermediates stay consistent across
+    # model families (Llama=silu, Gemma=gelu_pytorch_tanh, GPT-2=gelu_new).
+    activation_name = (
+        "gelu_new" if is_gpt2
+        else (getattr(model.config, "hidden_act", None) or "silu")
+    )
 
     captures: dict[str, Any] = {}
 
@@ -457,14 +482,15 @@ def _capture_block_deepdive(
         block.register_forward_hook(grab("block_output")),
     ]
     if is_gpt2:
+        # `mlp.act` (the activation module) is always present on HF GPT-2;
+        # we capture its output directly rather than re-applying the formula.
         handles += [
             attn.c_attn.register_forward_hook(grab("c_attn")),
             attn.c_proj.register_forward_hook(grab("attn_output")),
             mlp.c_fc.register_forward_hook(grab("ffn_pre_act")),
+            mlp.act.register_forward_hook(grab("ffn_post_act")),
             mlp.c_proj.register_forward_hook(grab("ffn_output")),
         ]
-        if hasattr(mlp, "act"):
-            handles.append(mlp.act.register_forward_hook(grab("ffn_post_act")))
     else:
         handles += [
             attn.q_proj.register_forward_hook(grab("q_proj_out")),
@@ -516,7 +542,12 @@ def _capture_block_deepdive(
     K_all = K_t.view(-1, kv_heads_for_reshape, head_dim).transpose(0, 1).contiguous()
     V_all = V_t.view(-1, kv_heads_for_reshape, head_dim).transpose(0, 1).contiguous()
     # Map query-head index to its corresponding KV-head (GQA grouping).
-    kv_idx = head_idx // (n_heads // kv_heads_for_reshape) if kv_heads_for_reshape else head_idx
+    # Real configs always have integer ratios; assert to surface a future surprise.
+    assert n_heads % kv_heads_for_reshape == 0, (
+        f"GQA expects n_heads ({n_heads}) divisible by n_kv_heads "
+        f"({kv_heads_for_reshape})"
+    )
+    kv_idx = head_idx // (n_heads // kv_heads_for_reshape)
     Qh = Q_all[head_idx].detach().float().numpy().astype(np.float32)
     Kh = K_all[kv_idx].detach().float().numpy().astype(np.float32)
     Vh = V_all[kv_idx].detach().float().numpy().astype(np.float32)
@@ -547,21 +578,14 @@ def _capture_block_deepdive(
     ffn_pre_act_t = captures["ffn_pre_act"][0]
     ffn_gate = None
     if is_gpt2:
-        if "ffn_post_act" in captures:
-            ffn_post_act_t = captures["ffn_post_act"][0]
-        else:
-            # Fallback: NewGELU manually
-            x = ffn_pre_act_t
-            ffn_post_act_t = 0.5 * x * (
-                1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * x ** 3))
-            )
+        # GPT-2's MLP always defines `self.act`, so the hook fires.
+        ffn_post_act_t = captures["ffn_post_act"][0]
     else:
-        if has_swiglu:
-            gate_t = captures["ffn_gate"][0]
-            ffn_post_act_t = torch.nn.functional.silu(gate_t) * ffn_pre_act_t
-            ffn_gate = gate_t.detach().float().numpy().astype(np.float32)
-        else:
-            ffn_post_act_t = torch.nn.functional.silu(ffn_pre_act_t)
+        # SwiGLU/GeGLU: activation(gate_proj(x)) ⊙ up_proj(x).
+        # The activation depends on the model family (Llama: silu; Gemma: gelu-tanh).
+        gate_t = captures["ffn_gate"][0]
+        ffn_post_act_t = _apply_activation(gate_t, activation_name) * ffn_pre_act_t
+        ffn_gate = gate_t.detach().float().numpy().astype(np.float32)
 
     return BlockDeepDive(
         layer_index=layer_idx,

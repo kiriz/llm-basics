@@ -265,30 +265,43 @@ class TraceData:
 def _load_block_deepdive(
     arrays: dict[str, np.ndarray], meta: dict[str, Any]
 ) -> BlockDeepDive | None:
+    """Reconstruct BlockDeepDive from cache payload.
+
+    Returns None either when the trace was collected without deep-dive, OR
+    when an expected key is missing (treated as a cache miss rather than a
+    raw KeyError — version drift recovery).
+    """
     if not meta.get("has_block_deepdive"):
         return None
-    bm = meta["block_deepdive_meta"]
-    return BlockDeepDive(
-        layer_index=int(bm["layer_index"]),
-        head_index=int(bm["head_index"]),
-        n_heads=int(bm["n_heads"]),
-        head_dim=int(bm["head_dim"]),
-        activation=str(bm["activation"]),
-        has_swiglu_gate=bool(bm["has_swiglu_gate"]),
-        pre_ln1=arrays["bd__pre_ln1"],
-        post_ln1=arrays["bd__post_ln1"],
-        q=arrays["bd__q"],
-        k=arrays["bd__k"],
-        v=arrays["bd__v"],
-        scores=arrays["bd__scores"],
-        weights=arrays["bd__weights"],
-        context=arrays["bd__context"],
-        attn_output=arrays["bd__attn_output"],
-        post_attn_residual=arrays["bd__post_attn_residual"],
-        post_ln2=arrays["bd__post_ln2"],
-        ffn_pre_act=arrays["bd__ffn_pre_act"],
-        ffn_post_act=arrays["bd__ffn_post_act"],
-        ffn_gate=arrays.get("bd__ffn_gate"),
-        ffn_output=arrays["bd__ffn_output"],
-        block_output=arrays["bd__block_output"],
-    )
+    bm = meta.get("block_deepdive_meta") or {}
+    try:
+        return BlockDeepDive(
+            layer_index=int(bm["layer_index"]),
+            head_index=int(bm["head_index"]),
+            n_heads=int(bm["n_heads"]),
+            head_dim=int(bm["head_dim"]),
+            activation=str(bm["activation"]),
+            has_swiglu_gate=bool(bm["has_swiglu_gate"]),
+            pre_ln1=arrays["bd__pre_ln1"],
+            post_ln1=arrays["bd__post_ln1"],
+            q=arrays["bd__q"],
+            k=arrays["bd__k"],
+            v=arrays["bd__v"],
+            scores=arrays["bd__scores"],
+            weights=arrays["bd__weights"],
+            context=arrays["bd__context"],
+            attn_output=arrays["bd__attn_output"],
+            post_attn_residual=arrays["bd__post_attn_residual"],
+            post_ln2=arrays["bd__post_ln2"],
+            ffn_pre_act=arrays["bd__ffn_pre_act"],
+            ffn_post_act=arrays["bd__ffn_post_act"],
+            ffn_gate=arrays.get("bd__ffn_gate"),
+            ffn_output=arrays["bd__ffn_output"],
+            block_output=arrays["bd__block_output"],
+        )
+    except KeyError as e:
+        print(
+            f"[cache] block_deepdive missing key {e!s}; "
+            f"run `llm-trace clear-cache` to refresh."
+        )
+        return None

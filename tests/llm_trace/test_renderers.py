@@ -264,3 +264,35 @@ def test_inside_block_renders_data_driven_html(tmp_path: Path):
     assert payload["block"]["layer_index"] == 2
     assert payload["block"]["head_index"] == 0
     assert payload["block"]["seq_len"] == 3
+    # Shape sanity: catch dim-flip regressions in _build_payload.
+    blk = payload["block"]
+    assert len(blk["pre_ln1"]) == blk["hidden_size"]
+    assert len(blk["ffn_pre_act"]) == blk["ffn_dim"]
+    assert len(blk["context"]) == blk["head_dim"]
+    assert blk["ffn_gate"] is None  # this fixture has no SwiGLU
+
+
+def test_inside_block_swiglu_path(tmp_path: Path):
+    """Exercise the SwiGLU-gate rendering path (Llama-family flow)."""
+    from llm_trace.renderers import inside_block
+    tr = _fake_trace()
+    bd = _fake_block_deepdive()
+    rng = np.random.RandomState(11)
+    object.__setattr__(bd, "has_swiglu_gate", True)
+    object.__setattr__(bd, "activation", "silu")
+    object.__setattr__(bd, "ffn_gate",
+                       rng.rand(bd.scores.shape[0], bd.ffn_pre_act.shape[1]).astype(np.float32))
+    object.__setattr__(tr, "block_deepdive", bd)
+    out = inside_block.render(tr, out_path=tmp_path / "block_swiglu.html")
+    text = out.read_text()
+    # The SwiGLU note is conditional on has_swiglu_gate; verify it shipped.
+    assert "SwiGLU gate" in text
+    # Payload's ffn_gate should be a list of `ffn_dim` floats (spotlight token).
+    import json as _json
+    import re
+    m = re.search(r'const D = (\{.*?\});', text, re.DOTALL)
+    payload = _json.loads(m.group(1).replace(r'<\/', '</'))
+    blk = payload["block"]
+    assert blk["has_swiglu_gate"] is True
+    assert blk["ffn_gate"] is not None
+    assert len(blk["ffn_gate"]) == blk["ffn_dim"]

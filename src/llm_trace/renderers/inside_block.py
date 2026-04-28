@@ -23,6 +23,10 @@ import numpy as np
 from llm_trace.renderers._util import html_escape as _esc
 from llm_trace.renderers._util import slug as _slug
 
+# JSON can't carry -inf. We replace masked-position scores with this sentinel
+# on the way out; the embedded JS uses the threshold -900 to detect "masked".
+_MASK_SENTINEL = -999.0
+
 
 def _build_payload(trace) -> dict[str, Any] | None:
     bd = trace.block_deepdive
@@ -30,10 +34,8 @@ def _build_payload(trace) -> dict[str, Any] | None:
         return None
     spot = len(trace.tokens) - 1  # spotlight = last prompt token
 
-    # Mask sentinel: replace -inf (above-diagonal) with a JS-friendly value.
-    # JS code knows that anything <= -900 means "masked" and renders greyed.
     scores_serial = bd.scores.copy()
-    scores_serial[np.isinf(scores_serial)] = -999.0
+    scores_serial[np.isinf(scores_serial)] = _MASK_SENTINEL
 
     return {
         "model_id": trace.model_id,
@@ -218,7 +220,11 @@ h2.step-title{font-size:24px;font-weight:800;margin-bottom:6px;
 .qkv-label.q{color:var(--teal)}
 .qkv-label.k{color:var(--blue)}
 .qkv-label.v{color:var(--amber)}
-.qkv-cells{display:flex;gap:1px;flex-wrap:nowrap;overflow-x:auto}
+.qkv-cells{display:flex;gap:1px;flex-wrap:nowrap;overflow-x:auto;
+  position:relative;
+  -webkit-mask-image:linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-image:linear-gradient(to right, black calc(100% - 28px), transparent)}
+.qkv-cells:hover{-webkit-mask-image:none;mask-image:none}
 
 /* ── Scores grid (substep 2) ─────────────────────────── */
 .scores-wrap{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
@@ -249,6 +255,7 @@ h2.step-title{font-size:24px;font-weight:800;margin-bottom:6px;
   background:var(--surface);padding:18px;border-radius:10px;
   border:1px solid var(--border);min-height:240px;
   position:relative}
+.softmax-bars.dense{padding-bottom:54px;min-height:280px}
 .softmax-bars .baseline{position:absolute;left:18px;right:18px;height:1px;
   background:var(--border);bottom:90px}
 .softmax-bar{flex:1;display:flex;flex-direction:column;align-items:center;
@@ -258,10 +265,16 @@ h2.step-title{font-size:24px;font-weight:800;margin-bottom:6px;
              background-color 700ms,bottom 700ms;
   position:absolute;bottom:90px}
 .softmax-bar .label{font-family:var(--mono);font-size:9.5px;color:var(--muted);
-  position:absolute;bottom:0;text-align:center;width:100%}
+  position:absolute;bottom:0;text-align:center;width:100%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transform-origin:center bottom}
+.softmax-bars.dense .softmax-bar .label{
+  transform:rotate(-45deg) translateX(-50%);
+  transform-origin:right top;left:50%;bottom:-2px;
+  width:auto;text-align:right}
 .softmax-bar .val{font-family:var(--mono);font-size:9.5px;color:var(--text);
-  font-weight:600;position:absolute;
-  transition:bottom 700ms cubic-bezier(.2,.8,.2,1),color 400ms}
+  font-weight:600;position:absolute;width:100%;text-align:center;
+  transition:bottom 700ms cubic-bezier(.2,.8,.2,1),color 400ms,opacity 300ms}
 .softmax-stage-controls{display:flex;gap:8px;margin-top:10px;
   font-family:var(--mono);font-size:11px}
 .sm-btn{background:var(--surface2);border:1px solid var(--border);
@@ -363,6 +376,31 @@ h2.step-title{font-size:24px;font-weight:800;margin-bottom:6px;
   border-radius:3px;border:1px solid var(--border);
   font-family:var(--mono);font-size:11px;color:var(--text)}
 .spotlight{color:var(--amber);font-weight:700}
+
+/* ── Focus styles (a11y) ────────────────────────────── */
+.btn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.pipe-step:focus-visible{outline:2px solid var(--teal);outline-offset:4px;
+  border-radius:4px}
+.sm-btn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.scrub:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.speed:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+
+/* ── Mobile (under 720px) ───────────────────────────── */
+@media (max-width: 720px){
+  .top-bar{padding:8px 14px;gap:10px;font-size:11px}
+  .top-bar .arch{display:none}
+  .top-bar .prompt{order:5;flex-basis:100%}
+  .pipeline{padding:10px 12px;overflow-x:auto}
+  .pipe-step .conn{width:24px}
+  .pipe-step .dot{width:18px;height:18px;font-size:9px}
+  .pipe-step .lbl{font-size:9px}
+  .body{padding:14px 14px}
+  .controls{padding:0 14px;gap:8px}
+  .step-pill{font-size:10px;padding:4px 9px}
+  .speed{display:none}
+  h2.step-title{font-size:18px}
+  .step-blurb{font-size:12px}
+}
 </style>
 </head>
 <body>
@@ -387,9 +425,9 @@ h2.step-title{font-size:24px;font-weight:800;margin-bottom:6px;
 
   <!-- ── Controls ─────────────────────────────────────── -->
   <div class="controls">
-    <button class="btn" id="btn-prev" title="prev (←)">‹</button>
-    <button class="btn primary" id="btn-play" title="play (space)">▶</button>
-    <button class="btn" id="btn-next" title="next (→)">›</button>
+    <button class="btn" id="btn-prev" title="prev (←)" aria-label="previous step">‹</button>
+    <button class="btn primary" id="btn-play" title="play (space)" aria-label="play">▶</button>
+    <button class="btn" id="btn-next" title="next (→)" aria-label="next step">›</button>
     <span class="step-pill" id="step-pill">step 1 / 6</span>
     <div class="scrub-wrap"><input type="range" id="scrub" class="scrub" min="0" max="5" value="0" step="1"></div>
     <select class="speed" id="speed">
@@ -446,19 +484,29 @@ function smallCell(v, mode){
 
 // ── STEP definitions ─────────────────────────────────────────────────
 const STEPS = [
-  { id:'qkv',     title:'Step 1 · LayerNorm + Q / K / V projection' },
-  { id:'scores',  title:'Step 2 · Scores: Q · K^T' },
-  { id:'softmax', title:'Step 3 · Softmax → attention weights' },
-  { id:'attn',    title:'Step 4 · Weights @ V → output projection → ⊕ residual' },
-  { id:'ffn',     title:'Step 5 · LayerNorm 2 + FFN expand + activation' },
-  { id:'out',     title:'Step 6 · FFN contract + ⊕ residual = block output' },
+  { id:'qkv',     title:'Step 1 · LayerNorm + Q / K / V projection',
+    pip:'Q/K/V' },
+  { id:'scores',  title:'Step 2 · Scores: Q · Kᵀ',
+    pip:'scores' },
+  { id:'softmax', title:'Step 3 · Softmax → attention weights',
+    pip:'softmax' },
+  { id:'attn',    title:'Step 4 · Weights @ V → output projection → ⊕ residual',
+    pip:'attn' },
+  { id:'ffn',     title:'Step 5 · LayerNorm 2 + FFN expand + activation',
+    pip:'FFN' },
+  { id:'out',     title:'Step 6 · FFN contract + ⊕ residual = block output',
+    pip:'output' },
 ];
 
 // ── Top bar fill-in ──────────────────────────────────────────────────
 {
   const m = D.model_meta || {};
   const blk = D.block;
-  document.getElementById('t-model').textContent = D.model_id;
+  // Show only the last path segment so long org/model ids don't push other
+  // chips onto a second line. Full id stays in the title attribute on hover.
+  const _modelEl = document.getElementById('t-model');
+  _modelEl.textContent = (D.model_id || '').split('/').pop();
+  _modelEl.title = D.model_id || '';
   document.getElementById('t-focus').textContent =
     `layer ${blk.layer_index} / head ${blk.head_index}` +
     `  (of ${m.n_layer} × ${m.n_head}, head_dim ${blk.head_dim})`;
@@ -473,16 +521,23 @@ const STEPS = [
 {
   const el = document.getElementById('pipeline');
   el.innerHTML = STEPS.map((s, i) => `
-    <div class="pipe-step" data-step="${i}">
+    <div class="pipe-step" data-step="${i}" tabindex="0"
+         role="button" aria-label="go to step ${i + 1}: ${esc(s.pip)}">
       <div class="row">
         ${i > 0 ? '<div class="conn"></div>' : ''}
         <div class="dot">${i + 1}</div>
       </div>
-      <div class="lbl">${esc(s.id)}</div>
+      <div class="lbl">${esc(s.pip)}</div>
     </div>
   `).join('');
   el.querySelectorAll('.pipe-step').forEach(p => {
     p.addEventListener('click', () => showStep(parseInt(p.dataset.step)));
+    p.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        showStep(parseInt(p.dataset.step));
+      }
+    });
   });
 }
 
@@ -497,9 +552,9 @@ function step_qkv() {
       Inside layer <b>${b.layer_index}</b>, head <b>${b.head_index}</b>.
       We're spotlighting the <span class="spotlight">last prompt token</span>
       <span class="token-pill">${esc(spotTok)}</span> (id ${D.token_ids[b.spotlight_idx]}).
-      <br>The block input vector hits LayerNorm 1, then is linearly projected into
-      <b>three</b> separate vectors — Q (the <i>query</i>), K (the <i>key</i>),
-      V (the <i>value</i>) — each of width <b>head_dim = ${b.head_dim}</b>.
+      <br>First, <b>LayerNorm 1</b> normalizes the block's input vector.
+      <br>Then three separate linear projections produce <b>Q</b>, <b>K</b>, and <b>V</b>
+      — each of width <b>head_dim = ${b.head_dim}</b>.
     </div>
 
     ${vecRow(
@@ -558,27 +613,11 @@ function step_scores() {
     if (v > -900 && Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
   }
   const scale = maxAbs || 1;
-  // Render with stagger — each cell gets animation-delay
-  let cells = '';
-  for (let r = 0; r < seq; r++) {
-    let row = '';
-    for (let c = 0; c < seq; c++) {
-      const v = b.scores[r][c];
-      const masked = v <= -900;
-      const norm = masked ? 0 : v / scale;
-      const delay = (r * seq + c) * 28;
-      const cell = smallCell(masked ? -1 : norm, masked ? 'masked' : null);
-      row += cell.replace('class="sc-cell', `class="sc-cell" style="animation-delay:${delay}ms`).replace('></span>', `></span>`);
-      // Re-write to inject delay properly:
-    }
-    cells += `<div class="sc-row">${row}</div>`;
-  }
-  // We need to inject animation-delay. Cleaner: rebuild here.
-  cells = '';
   // Cap total fill time to ~1.6s regardless of seq size; tiny seq still gets
   // a perceptible stagger.
   const totalCells = seq * seq;
   const perCellMs = Math.max(8, Math.min(28, Math.floor(1600 / totalCells)));
+  let cells = '';
   for (let r = 0; r < seq; r++) {
     let row = '';
     for (let c = 0; c < seq; c++) {
@@ -612,12 +651,21 @@ function step_scores() {
         <div class="sc-axis">key index →</div>
         <div class="scores-grid${seq > 12 ? ' dense' : ''}">${cells}</div>
       </div>
-      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);max-width:280px;line-height:1.6">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);max-width:300px;line-height:1.6">
         <b style="color:var(--text)">Reading the matrix:</b><br>
         Row <i>i</i> = "what does token <i>i</i>'s query attend to?"<br>
         Col <i>j</i> = "how relevant is token <i>j</i>'s key?"<br><br>
         For ${seq} tokens, that's ${seq * seq} dot products
         — but only ${(seq * (seq + 1)) / 2} unmasked.<br><br>
+
+        <b style="color:var(--text)">What to look for:</b><br>
+        • the <b style="color:var(--teal)">diagonal</b> — every token at least somewhat
+          attends to itself<br>
+        • a <b style="color:var(--amber)">bright column</b> — that key gets
+          looked at by many queries (often a "sink" token)<br>
+        • a <b style="color:var(--blue)">single bright cell</b> per row — a
+          focused look-back to a specific past token<br><br>
+
         ${b.has_swiglu_gate
           ? '<i>Note:</i> for Llama, scores are derived from the post-RoPE attention pattern (so softmax exactly reproduces the model\'s actual weights).'
           : ''}
@@ -659,7 +707,7 @@ function step_softmax() {
 
     <div class="softmax-stage-label" id="sm-stage-label">stage: raw scores (some negative)</div>
 
-    <div class="softmax-bars" id="sm-bars">
+    <div class="softmax-bars${rawRow.length >= 12 ? ' dense' : ''}" id="sm-bars">
       <div class="baseline"></div>
       ${rawRow.map((v, i) => `
         <div class="softmax-bar" data-raw="${v}" data-exp="${expRow[i]}" data-norm="${wRow[i]}">
@@ -689,35 +737,42 @@ function applySoftmaxStage(stage) {
     if (Math.abs(v) > max) max = Math.abs(v);
   });
   max = max || 1;
-  const baselineY = mode === 'raw' ? 90 : 0;   // px from bottom (matches CSS bottom:90px for raw)
   bars.forEach(bar => {
     const v = parseFloat(bar.dataset[mode]);
     const b = bar.querySelector('.b');
     const val = bar.querySelector('.val');
-    let h, bot, color, txt;
+    let h, bot, color, txt, valBot, hideVal = false;
     if (mode === 'raw') {
       // bidirectional bars about baseline at 90px
       h = Math.abs(v) / max * 90;
       bot = v >= 0 ? 90 : 90 - h;
       color = v >= 0 ? 'var(--teal)' : 'var(--coral)';
       txt = (v >= 0 ? '+' : '') + v.toFixed(2);
+      // Position the value text on the OUTER side of the bar so it never
+      // straddles the baseline.
+      valBot = v >= 0 ? bot + h + 4 : bot - 14;
     } else if (mode === 'exp') {
       h = v / max * 180;
       bot = 0;
       color = 'var(--amber)';
       txt = v.toFixed(2);
+      valBot = bot + h + 4;
     } else {
       h = v * 180;
       bot = 0;
       color = 'var(--purple)';
       txt = (v * 100).toFixed(1) + '%';
+      valBot = bot + h + 4;
+      // Hide tiny percentages so they don't pile on top of token labels.
+      hideVal = v < 0.02;
     }
     b.style.height = h + 'px';
     b.style.bottom = bot + 'px';
     b.style.background = color;
     val.textContent = txt;
-    val.style.bottom = (bot + h + 4) + 'px';
+    val.style.bottom = valBot + 'px';
     val.style.color = mode === 'norm' ? 'var(--purple)' : 'var(--text)';
+    val.style.opacity = hideVal ? '0' : '1';
   });
   // Update active button
   document.querySelectorAll('.sm-btn').forEach(b => {
@@ -760,10 +815,10 @@ function step_attn_output() {
   return `
     <h2 class="step-title">${esc(STEPS[3].title)}</h2>
     <div class="step-blurb">
-      The weights from the spotlighted query token (last) get multiplied by each
-      token's V vector, then summed → <b>context</b> vector.
-      Then a final linear <b>output projection</b> brings it back to ${b.hidden_size} dims,
-      and the <b>residual</b> is added to keep the original signal.
+      Each weight scales one token's <b>V</b> vector; the scaled vectors sum into a single
+      <b>context</b> vector — the head's "view" of the input.
+      <br>The <b>output projection</b> then maps context (head_dim) back up to
+      <b>${b.hidden_size}</b> dims, and a <b>residual add</b> rejoins the original signal.
     </div>
 
     <div class="attn-out-grid">
@@ -842,6 +897,16 @@ function step_ffn_expand() {
 
     <div style="text-align:center;color:var(--teal);margin:10px 0;font-family:var(--mono);font-size:13px">
       ↓ up_proj: ${b.hidden_size} → ${b.ffn_dim}
+      &nbsp;<span style="color:var(--muted);font-size:11.5px">(${(b.ffn_dim / b.hidden_size).toFixed(2)}× wider)</span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;font-family:var(--mono);font-size:10.5px;color:var(--muted)">
+      <span style="display:inline-block;width:${Math.round(b.hidden_size / b.ffn_dim * 100)}%;height:2px;background:var(--blue);position:relative">
+        <span style="position:absolute;top:-14px;left:0;color:var(--blue)">${b.hidden_size}</span>
+      </span>
+      <span style="display:inline-block;flex:1;height:2px;background:var(--teal);position:relative">
+        <span style="position:absolute;top:-14px;right:0;color:var(--teal)">${b.ffn_dim}</span>
+      </span>
     </div>
 
     ${strip(b.ffn_pre_act, `<b>pre-activation</b> · ${b.ffn_dim} cells (each is one channel)`, 'expanded')}
@@ -904,16 +969,16 @@ function step_block_output() {
 
 function activationCurveSvg(act) {
   // Inline SVG showing the activation curve. Domain x in [-4, 4].
-  const W = 600, H = 120;
+  const W = 600, H = 110;
   const xs = [];
   for (let i = 0; i <= 80; i++) xs.push(-4 + i * 0.1);
   function y(x) {
     if (act === 'silu') return x / (1 + Math.exp(-x));
-    if (act === 'gelu_new') {
+    if (act === 'gelu_new' || act === 'gelu_pytorch_tanh') {
       const t = Math.tanh(Math.sqrt(2/Math.PI) * (x + 0.044715*x*x*x));
       return 0.5 * x * (1 + t);
     }
-    // gelu (default)
+    // gelu (exact)
     return 0.5 * x * (1 + Math.tanh(Math.sqrt(2/Math.PI)*(x + 0.044715*x*x*x)));
   }
   // Map (x,y) to svg coords. y range [-2, 4].
@@ -922,13 +987,22 @@ function activationCurveSvg(act) {
   const pts = xs.map(x => `${xmap(x).toFixed(1)},${ymap(y(x)).toFixed(1)}`).join(' ');
   const xZero = xmap(0), yZero = ymap(0);
   const yMin = ymap(-2), yMax = ymap(4);
+  // X-axis tick labels at -4, -2, 0, 2, 4.
+  const xTicks = [-4, -2, 0, 2, 4].map(x =>
+    `<text class="label" x="${xmap(x)}" y="${yZero + 14}" text-anchor="middle">${x}</text>`
+  ).join('');
+  // Y-axis tick labels at 0, 1, 2, 3.
+  const yTicks = [0, 1, 2, 3].map(yy =>
+    `<text class="label" x="${xZero - 6}" y="${ymap(yy) + 4}" text-anchor="end">${yy}</text>`
+  ).join('');
   return `
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
       <line class="axis" x1="${xZero}" y1="${yMax}" x2="${xZero}" y2="${yMin}"></line>
       <line class="axis" x1="30" y1="${yZero}" x2="${W - 20}" y2="${yZero}"></line>
       <polyline class="curve" points="${pts}"></polyline>
-      <text class="label" x="${W - 60}" y="${yZero - 6}">x</text>
-      <text class="label" x="${xZero + 6}" y="20">${esc(act)}(x)</text>
+      ${xTicks}${yTicks}
+      <text class="label" x="${W - 20}" y="${yZero - 6}" text-anchor="end">x</text>
+      <text class="label" x="${xZero + 6}" y="18">${esc(act)}(x)</text>
     </svg>
   `;
 }
@@ -964,8 +1038,8 @@ function showStep(n) {
   if (step.id === 'softmax') {
     // Run an automated walk: raw → exp → norm at 1.5s intervals
     setTimeout(() => applySoftmaxStage('raw'), 80);
-    setTimeout(() => applySoftmaxStage('exp'), 1500);
-    setTimeout(() => applySoftmaxStage('norm'), 3000);
+    setTimeout(() => applySoftmaxStage('exp'), 2200);
+    setTimeout(() => applySoftmaxStage('norm'), 4400);
     document.querySelectorAll('.sm-btn').forEach(btn => {
       btn.addEventListener('click', () => applySoftmaxStage(btn.dataset.stage));
     });
