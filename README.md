@@ -8,12 +8,35 @@ The point: demystify "the model is just a function over learned weights". Each s
 
 Hosted on GitHub Pages: **https://kiriz.github.io/llm-basics/**
 
+- **[How LLMs are wired — the input/output contract](https://kiriz.github.io/llm-basics/how-llms-are-wired.html)** — the explainer: an LLM as an API contract, with the *real* chat templates from six model families
 - **[distilgpt2 — "January, February, March,"](https://kiriz.github.io/llm-basics/distilgpt2-january-february-march.html)** — 6-layer GPT-2 base model completing a sequence
 - **[TinyLlama — "Name three primary colors."](https://kiriz.github.io/llm-basics/tinyllama-name-three-primary-colors.html)** — 22-layer chat-tuned Llama answering a question
 - **[Inside one transformer block (distilgpt2)](https://kiriz.github.io/llm-basics/inside-one-block-distilgpt2.html)** — 6-substep deep-dive: LN1 → Q/K/V → scores → softmax → FFN
 - **[Inside one transformer block (TinyLlama)](https://kiriz.github.io/llm-basics/inside-one-block-tinyllama.html)** — same, on the larger Llama-family architecture (SwiGLU, GQA)
 - **[Embedding-space scatter (distilgpt2)](https://kiriz.github.io/llm-basics/embeddings-distilgpt2.html)** — PCA projection of all 50,257 vocab tokens
 - **[Embedding-space scatter (TinyLlama)](https://kiriz.github.io/llm-basics/embeddings-tinyllama.html)** — same, for TinyLlama's 32,000 vocab
+
+## How LLMs are wired (explainer)
+
+A written page for engineers who think in APIs: the two stacked layers (an ordinary REST
+contract on top, `int[] → float[vocab]` underneath), why the model is stateless, and why
+prompt injection has no prepared-statement equivalent.
+
+Its claims about prompt format are **shown rather than asserted**. The page renders one
+identical pair of messages through six model families' own published `chat_template` files —
+distilgpt2, TinyLlama, Qwen2.5, NVIDIA's Llama-derived Nemotron, Mistral and OpenAI's
+gpt-oss — each linked to the source file. Three things fall out that prose alone would not
+settle:
+
+- **distilgpt2 has no chat template at all** — roles are taught in post-training, not built
+  into the architecture.
+- **Mistral has no system role**; it folds system text into the first user turn. **gpt-oss
+  renames** `system` to `developer` and prepends its own synthesised system block.
+- **Nemotron injects `<AVAILABLE_TOOLS>[]`** even when no tools were declared.
+
+Regenerate the exhibits with `python fetch-chat-templates.py` (fetches tokenizer configs
+only — no weights). Meta's Llama and Google's Gemma are licence-gated, so the page cites
+Meta's published prompt-format docs rather than showing an artefact.
 
 ## What the demo shows
 
