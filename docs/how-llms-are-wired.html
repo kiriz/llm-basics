@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How LLMs are wired — the input/output contract | llm-basics</title>
+<meta name="description" content="An LLM as an API contract: what the HTTP layer promises, what the tensor actually eats, and where the glue lives. With the real chat templates from Qwen, gpt-oss, Nemotron, Mistral and TinyLlama.">
+<style>
+  :root{
+    --bg:#080b12;--surface:#0e1220;--surface2:#151b2e;--surface3:#1c2236;
+    --border:#1f2a45;--text:#cdd6f0;--muted:#5a6888;
+    --teal:#00d4aa;--amber:#ffb800;--blue:#4da6ff;--purple:#c084fc;--red:#ff6b6b;
+    --mono:'SF Mono',Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--sans);background:var(--bg);color:var(--text);
+    line-height:1.6;min-height:100vh;
+    background-image:radial-gradient(circle at 20% 0%, rgba(0,212,170,0.06), transparent 50%),
+                     radial-gradient(circle at 80% 100%, rgba(77,166,255,0.05), transparent 50%)}
+  .wrap{max-width:980px;margin:0 auto;padding:60px 28px 80px}
+  .stamp{font-family:var(--mono);font-size:11px;color:var(--muted);
+    letter-spacing:.12em;text-transform:uppercase;margin-bottom:14px}
+  .stamp a{color:var(--muted);text-decoration:none;border-bottom:1px dashed var(--border)}
+  .stamp a:hover{color:var(--teal);border-bottom-color:var(--teal)}
+  h1{font-size:42px;font-weight:800;letter-spacing:-0.02em;line-height:1.15;
+    margin-bottom:18px;background:linear-gradient(180deg,var(--text),var(--muted));
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  h1 .accent{color:var(--teal);-webkit-text-fill-color:var(--teal)}
+  .lede{font-size:17px;color:var(--text);max-width:740px;margin-bottom:14px}
+  .lede b{color:var(--teal)}
+  .sub{font-size:14px;color:var(--muted);max-width:740px;margin-bottom:12px}
+  p{max-width:740px;margin-bottom:14px}
+  h2{font-size:24px;font-weight:700;letter-spacing:-0.01em;margin:52px 0 14px;color:var(--text)}
+  h2 .num{font-family:var(--mono);font-size:13px;color:var(--teal);margin-right:10px;font-weight:600}
+  h3{font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px}
+  .section-title{font-family:var(--mono);font-size:11px;color:var(--muted);
+    letter-spacing:.14em;text-transform:uppercase;font-weight:700;margin:36px 0 14px}
+  code{font-family:var(--mono);font-size:.9em;color:var(--amber);
+    background:var(--surface2);padding:1px 5px;border-radius:3px}
+  b{color:var(--text)}
+  a{color:var(--blue)}
+
+  .keybox{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--teal);
+    border-radius:10px;padding:18px 22px;margin:22px 0;max-width:740px}
+  .keybox .k{font-family:var(--mono);font-size:10px;color:var(--teal);
+    letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px}
+  .keybox p:last-child{margin-bottom:0}
+
+  .warn{border-left-color:var(--red)}
+  .warn .k{color:var(--red)}
+
+  pre.flow{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text);
+    background:var(--surface);border:1px solid var(--border);border-radius:10px;
+    padding:18px 20px;overflow-x:auto;margin:20px 0}
+  pre.flow .g{color:var(--muted)}
+  pre.flow .t{color:var(--teal)}
+  pre.flow .a{color:var(--amber)}
+
+  table{border-collapse:collapse;width:100%;margin:20px 0;font-size:13.5px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{font-family:var(--mono);font-size:10.5px;color:var(--muted);letter-spacing:.1em;
+    text-transform:uppercase;font-weight:700}
+  td code{font-size:12px}
+  .tbl-wrap{overflow-x:auto}
+
+  .exhibit{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+    padding:16px 18px;margin-bottom:14px;position:relative;overflow:hidden}
+  .exhibit::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
+    background:var(--accent,var(--teal));opacity:.7}
+  .exhibit.amber{--accent:var(--amber)} .exhibit.blue{--accent:var(--blue)}
+  .exhibit.purple{--accent:var(--purple)}
+  .ex-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .ex-head h3{margin-bottom:0}
+  .src{font-family:var(--mono);font-size:10.5px;color:var(--blue);text-decoration:none;
+    border-bottom:1px dashed var(--blue)}
+  .src:hover{color:var(--teal);border-bottom-color:var(--teal)}
+  .ex-note{font-size:12.5px;color:var(--muted);margin:4px 0 10px}
+  pre.raw{font-family:var(--mono);font-size:12px;line-height:1.65;white-space:pre-wrap;
+    word-break:break-word;background:var(--bg);border:1px solid var(--border);
+    border-radius:6px;padding:12px 14px;color:var(--text)}
+  .none{font-family:var(--mono);font-size:12px;line-height:1.65;white-space:pre-wrap;
+    background:var(--bg);border:1px dashed var(--border);border-radius:6px;
+    padding:12px 14px;color:var(--muted)}
+  .none code{color:var(--muted);background:none;padding:0}
+
+  ol,ul{max-width:740px;margin:0 0 14px 22px}
+  li{margin-bottom:7px}
+
+  .footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--border);
+    font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.9}
+  .footer a{color:var(--blue);text-decoration:none;border-bottom:1px dashed var(--blue)}
+  .footer a:hover{color:var(--teal);border-bottom-color:var(--teal)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="stamp"><a href="index.html">← llm-basics</a></div>
+  <h1>How LLMs are wired:<br>the <span class="accent">input/output contract</span>.</h1>
+
+  <p class="lede">
+    A mental model for engineers who think in APIs, request/response and contracts. The claim
+    is simple: an LLM is <b>blob in, blob out</b> — a list of integers goes in, a probability
+    distribution over the next integer comes out. Roles, memory, chat history, RAG, system
+    prompts: all of it is convention layered on top by glue code.
+  </p>
+  <p class="sub">
+    Everything asserted here about prompt formats is shown, not just stated — the exhibits
+    below are the <b>real chat templates</b>, fetched from each model's published tokenizer
+    config, rendered on the same two messages.
+  </p>
+
+  <h2><span class="num">01</span>Two layers, not one</h2>
+
+  <p>
+    Most confusion comes from collapsing two distinct layers into one idea of "the model".
+    They are stacked, and only the top one looks like software you have written before.
+  </p>
+
+  <div class="tbl-wrap"><table>
+    <tr><th>Layer</th><th>What it is</th><th>Nearest thing you already know</th></tr>
+    <tr>
+      <td><b>The API surface</b></td>
+      <td><code>POST</code> a JSON body with <code>model</code>, <code>messages</code>,
+          <code>temperature</code>, <code>max_tokens</code>. JSON or a stream comes back.</td>
+      <td>An ordinary REST endpoint. Rigid, versioned, deterministic <i>in shape</i> — the same
+          request always parses the same way.</td>
+    </tr>
+    <tr>
+      <td><b>The raw model contract</b></td>
+      <td>A flat sequence of token IDs in; a probability distribution over the next token out.
+          One vector in, one vector out. That is the entire native interface.</td>
+      <td>A pure function. No routes, no fields, no types — just
+          <code>f(int[]) → float[vocab]</code>.</td>
+    </tr>
+  </table></div>
+
+  <p>
+    Everything in between — turning your <code>messages</code> array into one flat list of
+    integers — is <b>glue code</b>. Hosted providers hide it. Run a model yourself and you
+    inherit it.
+  </p>
+
+<pre class="flow"><span class="g">Your JSON  ──►</span>  [ <span class="t">glue: tokenize + apply chat template</span> ]  <span class="g">──►</span>  <span class="a">[1023, 88, 5501, ...]</span>  <span class="g">──►</span>  MODEL
+                                                                                          <span class="g">│</span>
+<span class="g">Your app   ◄──</span>  [ <span class="t">glue: detokenize + wrap in JSON</span> ]  <span class="g">◄──</span>  probability distribution  <span class="g">◄────────┘</span></pre>
+
+  <h2><span class="num">02</span>The blob is the whole conversation</h2>
+
+  <p>
+    Two consequences fall out of "blob in, blob out", and both matter in production.
+  </p>
+
+  <p>
+    <b>It is not just your latest message.</b> The glue flattens the entire interaction —
+    system prompt, every prior turn, your new message — into one long token sequence,
+    consumed in a single forward pass.
+  </p>
+
+  <p>
+    <b>The model is stateless.</b> There is no memory between calls. Every request re-sends the
+    full history. The continuity you feel in a chat is maintained entirely on your side by
+    resending context. The model wakes up, reads the whole blob, answers, and forgets.
+  </p>
+
+  <div class="keybox">
+    <div class="k">The comparison</div>
+    <p>
+      This is a stateless web tier, exactly. The model is the request handler that holds nothing
+      between calls; your conversation store is the session backend. "Memory" in an agent is
+      <b>your</b> component to build — the model offers no persistence whatsoever. You decide
+      what to keep, summarise or drop, and you re-inject it every single turn.
+    </p>
+  </div>
+
+  <h2><span class="num">03</span>Two buckets: knobs and data</h2>
+
+  <p>What you send splits cleanly in two, and the split is not where people expect.</p>
+
+  <div class="tbl-wrap"><table>
+    <tr><th></th><th>Bucket 1 — control parameters</th><th>Bucket 2 — the data blob</th></tr>
+    <tr><td><b>Contains</b></td>
+        <td><code>temperature</code>, <code>top_p</code>, <code>max_tokens</code>,
+            <code>stop</code>, reasoning effort</td>
+        <td>System prompt, task, chat history, RAG chunks, injected memory</td></tr>
+    <tr><td><b>Reaches the model?</b></td>
+        <td><b>No.</b> These sit outside the token sequence and configure the sampler — the
+            code that picks a token from the output distribution.</td>
+        <td><b>Yes.</b> All of it is tokenised into the one flat sequence the model consumes.</td></tr>
+    <tr><td><b>Like</b></td>
+        <td>Query hints or connection settings — they tune execution, not meaning.</td>
+        <td>The request body.</td></tr>
+  </table></div>
+
+  <p>
+    The critical part: <b>the model does not distinguish between the categories inside bucket 2.</b>
+    "Short-term memory", "long-term memory", "context", "history", "retrieved documents" are
+    human-side organising concepts. To the model it is one undifferentiated stream of integers.
+  </p>
+
+  <h2><span class="num">04</span>So how does it tell a system prompt from user text?</h2>
+
+  <p>
+    Only through <b>learned formatting cues</b> — special delimiter tokens. The glue wraps each
+    section in markers the model was trained to recognise. These are just more integers. During
+    alignment the model saw millions of examples formatted exactly this way, so it learned,
+    statistically, that text after the system marker tends to be authoritative and that it
+    should speak as the assistant.
+  </p>
+
+  <div class="keybox">
+    <div class="k">There is no parser</div>
+    <p>
+      No schema, no config, no validator enforces these roles anywhere. It is convention baked
+      in as a statistical habit. Which means the distinctions we care about are
+      <b>an illusion maintained by formatting</b> — and that claim is testable. Below is what
+      actually happens.
+    </p>
+  </div>
+
+  <div class="section-title">Exhibit · the same two messages, six real templates</div>
+
+  <p class="sub">
+    Every block below is produced by rendering that model's own published
+    <code>chat_template</code> on an identical input:
+    <code>system: "You are terse."</code> and <code>user: "Name three primary colors."</code>
+    Each links to the source file it came from.
+  </p>
+
+      <div class="exhibit">
+        <div class="ex-head">
+          <h3>distilgpt2</h3>
+          <a class="src" href="https://huggingface.co/distilgpt2/blob/main/tokenizer_config.json" target="_blank" rel="noopener">distilgpt2</a>
+        </div>
+        <div class="ex-note">Base model — pretraining only, no alignment stage.</div>
+<div class="none">No <code>chat_template</code> field exists in this model’s tokenizer config.
+It was never taught what a “system” or “user” turn is.</div>
+      </div>
+      <div class="exhibit">
+        <div class="ex-head">
+          <h3>TinyLlama 1.1B Chat</h3>
+          <a class="src" href="https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/blob/main/tokenizer_config.json" target="_blank" rel="noopener">TinyLlama/TinyLlama-1.1B-Chat-v1.0</a>
+        </div>
+        <div class="ex-note">The model used in this site's other demos.</div>
+<pre class="raw">&lt;|system|&gt;
+You are terse.&lt;/s&gt;
+&lt;|user|&gt;
+Name three primary colors.&lt;/s&gt;
+&lt;|assistant|&gt;
+</pre>
+      </div>
+      <div class="exhibit">
+        <div class="ex-head">
+          <h3>Qwen2.5 7B Instruct</h3>
+          <a class="src" href="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/tokenizer_config.json" target="_blank" rel="noopener">Qwen/Qwen2.5-7B-Instruct</a>
+        </div>
+        <div class="ex-note">Alibaba. ChatML delimiters.</div>
+<pre class="raw">&lt;|im_start|&gt;system
+You are terse.&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+Name three primary colors.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+</pre>
+      </div>
+      <div class="exhibit blue">
+        <div class="ex-head">
+          <h3>Llama-3.1-Nemotron-Nano 8B</h3>
+          <a class="src" href="https://huggingface.co/nvidia/Llama-3.1-Nemotron-Nano-8B-v1/blob/main/tokenizer_config.json" target="_blank" rel="noopener">nvidia/Llama-3.1-Nemotron-Nano-8B-v1</a>
+        </div>
+        <div class="ex-note">NVIDIA, Llama-3 derived — so these are Llama-3's delimiters.</div>
+<pre class="raw">&lt;|begin_of_text|&gt;&lt;|start_header_id|&gt;system&lt;|end_header_id|&gt;
+
+You are terse.
+
+&lt;AVAILABLE_TOOLS&gt;[]&lt;/AVAILABLE_TOOLS&gt;&lt;|eot_id|&gt;&lt;|start_header_id|&gt;user&lt;|end_header_id|&gt;
+
+Name three primary colors.&lt;|eot_id|&gt;&lt;|start_header_id|&gt;assistant&lt;|end_header_id|&gt;
+
+</pre>
+      </div>
+      <div class="exhibit purple">
+        <div class="ex-head">
+          <h3>Mistral 7B Instruct v0.3</h3>
+          <a class="src" href="https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/blob/main/tokenizer_config.json" target="_blank" rel="noopener">mistralai/Mistral-7B-Instruct-v0.3</a>
+        </div>
+        <div class="ex-note">Mistral AI. Note what happens to the system prompt.</div>
+<pre class="raw">&lt;s&gt;[INST] You are terse.
+
+Name three primary colors.[/INST]</pre>
+      </div>
+      <div class="exhibit amber">
+        <div class="ex-head">
+          <h3>gpt-oss 20B</h3>
+          <a class="src" href="https://huggingface.co/openai/gpt-oss-20b/blob/main/tokenizer_config.json" target="_blank" rel="noopener">openai/gpt-oss-20b</a>
+        </div>
+        <div class="ex-note">OpenAI's open-weight model. “Harmony” format.</div>
+<pre class="raw">&lt;|start|&gt;system&lt;|message|&gt;You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2026-08-12
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.&lt;|end|&gt;&lt;|start|&gt;developer&lt;|message|&gt;# Instructions
+
+You are terse.
+
+&lt;|end|&gt;&lt;|start|&gt;user&lt;|message|&gt;Name three primary colors.&lt;|end|&gt;&lt;|start|&gt;assistant</pre>
+      </div>
+  <h2><span class="num">05</span>What those exhibits actually prove</h2>
+
+  <p>
+    They go further than "the delimiters differ". Read them side by side and three things fall out
+    that no amount of prose would convince you of.
+  </p>
+
+  <div class="keybox">
+    <div class="k">Finding 1 · roles are learned, not built in</div>
+    <p>
+      <b>distilgpt2 has no chat template at all.</b> The field simply does not exist in its
+      tokenizer config. It is a pretrained base model that never went through alignment, so it has
+      no concept of "system" or "user" — it can only continue text. Roles are not part of the
+      transformer architecture; they are taught in post-training, and a model that skipped that
+      stage does not have them.
+    </p>
+  </div>
+
+  <div class="keybox">
+    <div class="k">Finding 2 · a role you send may not survive the trip</div>
+    <p>
+      <b>Mistral has no system role.</b> Its template folds your system text into the front of the
+      first user turn — the output is <code>[INST] You are terse.\n\nName three primary colors.[/INST]</code>
+      with no separate system section at all. <b>gpt-oss goes further and renames it</b>: your
+      <code>system</code> message is re-labelled <code>developer</code>, while the model's own
+      synthesised system block — identity, knowledge cutoff, today's date, reasoning effort,
+      channel rules — is inserted above it. You did not write any of that.
+    </p>
+  </div>
+
+  <div class="keybox">
+    <div class="k">Finding 3 · the glue adds things you never sent</div>
+    <p>
+      <b>Nemotron injects <code>&lt;AVAILABLE_TOOLS&gt;[]</code></b> into the system section even
+      though the request declared no tools. Between your clean <code>messages</code> array and the
+      integers the tensor eats, a template you did not write is making decisions.
+    </p>
+  </div>
+
+  <p>
+    So "you code once against a common contract and each provider handles the last mile" is true
+    at the surface, and the last mile is doing more than translation. The <b>format</b> is
+    deterministic and rigid; the <b>model's output</b> is what is nondeterministic. Do not
+    conflate the two.
+  </p>
+
+  <div class="tbl-wrap"><table>
+    <tr><th>Family</th><th>System marker</th><th>Turn terminator</th><th>Notable</th></tr>
+    <tr><td>GPT-2 / distilgpt2</td><td><i>none</i></td><td><i>none</i></td>
+        <td>No template. Base model, completion only.</td></tr>
+    <tr><td>TinyLlama (Zephyr style)</td><td><code>&lt;|system|&gt;</code></td><td><code>&lt;/s&gt;</code></td>
+        <td>Newline-separated, minimal.</td></tr>
+    <tr><td>Qwen 2.5 (ChatML)</td><td><code>&lt;|im_start|&gt;system</code></td><td><code>&lt;|im_end|&gt;</code></td>
+        <td>The most widely copied shape.</td></tr>
+    <tr><td>Llama 3 (via Nemotron)</td><td><code>&lt;|start_header_id|&gt;system&lt;|end_header_id|&gt;</code></td>
+        <td><code>&lt;|eot_id|&gt;</code></td><td>Header pairs; tool scaffolding auto-added.</td></tr>
+    <tr><td>Mistral</td><td><i>none — merged into user</i></td><td><code>[/INST]</code></td>
+        <td>No system role exists.</td></tr>
+    <tr><td>gpt-oss (Harmony)</td><td><code>&lt;|start|&gt;developer&lt;|message|&gt;</code></td>
+        <td><code>&lt;|end|&gt;</code></td><td>Renames your role; prepends its own system block.</td></tr>
+  </table></div>
+
+  <h2><span class="num">06</span>Why prompt injection works</h2>
+
+  <p>
+    This follows directly. If roles were enforced structure, pasting
+    <i>"ignore previous instructions"</i> into a document could never work. But it is all one
+    blob, and the model is only guessing from learned patterns, so hostile text inside a RAG
+    chunk or a tool result can impersonate the system voice. Nothing protects the system
+    instructions from retrieved content.
+  </p>
+
+  <div class="keybox warn">
+    <div class="k">The comparison — and where it breaks down</div>
+    <p>
+      This is the same shape of bug as SQL injection or XSS: untrusted input reaching an
+      interpreter that cannot tell data from instructions. The difference is that those have a
+      real fix. Prepared statements work because the database parses the query and the parameters
+      <b>separately</b> — the structure is decided before the data arrives.
+    </p>
+    <p>
+      There is no prepared statement for a prompt. The exhibits above are the reason: the
+      "structure" is delimiter tokens in the same stream as the data, recognised by a statistical
+      habit rather than a parser. Escaping helps at the margins and guarantees nothing.
+    </p>
+  </div>
+
+  <p>
+    So treat every injected string — RAG chunks, memory, tool output, anything a user can
+    influence — as <b>untrusted input</b>, and put the guarantees you need
+    <b>outside</b> the model. Validate the output rather than trusting the instructions held.
+  </p>
+
+  <h2><span class="num">07</span>Where roles get taught</h2>
+
+  <p>
+    A model is built in three broad stages, and it is worth knowing which one produces the
+    behaviour you rely on every day.
+  </p>
+
+  <div class="tbl-wrap"><table>
+    <tr><th>Stage</th><th>What happens</th><th>What the model knows after</th></tr>
+    <tr><td><b>1 · Pretraining</b></td>
+        <td>Corpus collection and filtering; tokenizer trained (the integer alphabet is frozen
+            here); architecture chosen; next-token prediction over trillions of tokens.</td>
+        <td>Grammar, facts, reasoning primitives. <b>Nothing about system, user or chat.</b>
+            It is a text-completion engine — exactly the distilgpt2 exhibit.</td></tr>
+    <tr><td><b>2 · Post-training</b></td>
+        <td>Supervised fine-tuning on instruction/response pairs <i>formatted with the delimiter
+            tokens</i>; preference data; reward model; RLHF/DPO; safety tuning; tool-call formats.</td>
+        <td><b>This is where roles are learned.</b> SFT teaches the template; RLHF reinforces
+            obeying the system voice over the user voice.</td></tr>
+    <tr><td><b>3 · Packaging</b></td>
+        <td>Evaluation, optional quantisation, then weights + tokenizer + chat template wrapped in
+            a serving stack (vLLM, TGI, Ollama) exposing an OpenAI-shaped endpoint.</td>
+        <td>Unchanged — this stage only adds the glue that converts your JSON into that exact raw
+            sequence.</td></tr>
+  </table></div>
+
+  <p>
+    That is precisely why the hierarchy is <b>soft</b>: it is a trained habit, not a parser. And
+    why formats are <b>family-specific</b>: each lab picked its own delimiters at the fine-tuning
+    step, which is exactly what the exhibits show.
+  </p>
+
+  <h2><span class="num">08</span>Running one yourself</h2>
+
+  <p>
+    Internal or frontier, the physics are identical — token IDs in, distribution out. Only the
+    maintainer of the glue changes. Self-host and you own two pieces the providers hide:
+  </p>
+
+  <ol>
+    <li><b>The tokenizer.</b> Must be the exact one used at training time. It is the frozen
+        alphabet; get it wrong and everything downstream is garbage.</li>
+    <li><b>The chat template.</b> Replicate the delimiters the model was tuned with, or it gets
+        confused about who is speaking. Feed one family's format to another and output degrades,
+        because those markers were never learned.</li>
+  </ol>
+
+  <p>
+    Serving tools — vLLM, Ollama, Hugging Face TGI — play the provider's role for you: hand them
+    weights plus tokenizer config plus chat template, and they expose the familiar endpoint.
+  </p>
+
+  <div class="section-title">Checklist · using an LLM with no framework</div>
+  <ol>
+    <li><b>Match tokenizer and template to the model.</b> Automatic on hosted APIs; silent-failure-prone locally.</li>
+    <li><b>Own the statelessness.</b> Re-send the relevant history every call.</li>
+    <li><b>Budget the context window.</b> Track token counts; decide what to keep, summarise or drop.</li>
+    <li><b>Write a tight system prompt.</b> Durable rules, role, constraints, output contract — the strongest steering lever.</li>
+    <li><b>Keep the task payload in the user turn</b>, separate from instructions.</li>
+    <li><b>Use few-shot for format control.</b> Not a feature or a flag — just worked examples pasted into the blob before your real question. Showing the shape beats describing it.</li>
+    <li><b>Set the sampling knobs deliberately.</b> Low temperature for extraction, higher for generation; set <code>max_tokens</code> and <code>stop</code>.</li>
+    <li><b>Force structured output</b> when code consumes it, and use schema/JSON mode where offered.</li>
+    <li><b>Validate and guard the output.</b> It is the only nondeterministic surface in the pipeline.</li>
+    <li><b>Treat injected content as untrusted</b> — see section 06.</li>
+    <li><b>Handle timeouts, rate limits and partial streams yourself.</b> No framework is catching them.</li>
+  </ol>
+
+  <h2><span class="num">09</span>The through-line</h2>
+
+  <div class="keybox">
+    <div class="k">Summary</div>
+    <p><b>Input side:</b> deterministic, rigid, and yours to control.</p>
+    <p><b>The build pipeline:</b> taught the model to <i>recognise</i> the structure you send — as a
+       habit, not a schema.</p>
+    <p><b>Output side:</b> the single nondeterministic surface. Guard it.</p>
+    <p>
+      The word "chat", the notion of "roles", the taxonomy of "memories" — convention wrapped
+      around a stateless, blob-in/blob-out next-token predictor. Every guarantee you need beyond
+      "the next token is probable" has to be built <b>around</b> the model, not expected from
+      <b>inside</b> it.
+    </p>
+  </div>
+
+  <div class="section-title">Sources</div>
+  <p class="sub">
+    The six exhibits are rendered from each model's own published <code>chat_template</code>,
+    linked in place above. Meta's Llama models are licence-gated on Hugging Face, so no artefact
+    is shown for them directly — the Llama-3 delimiters above come from NVIDIA's Llama-derived
+    Nemotron, and Meta documents the format itself in the reference below.
+  </p>
+  <ul>
+    <li><a href="https://www.llama.com/docs/model-cards-and-prompt-formats/llama3_1/" target="_blank" rel="noopener">Meta — Llama 3.1 prompt format reference</a></li>
+    <li><a href="https://huggingface.co/openai/gpt-oss-20b/blob/main/chat_template.jinja" target="_blank" rel="noopener">OpenAI gpt-oss — Harmony chat template</a></li>
+    <li><a href="https://huggingface.co/nvidia/Llama-3.1-Nemotron-Nano-8B-v1" target="_blank" rel="noopener">NVIDIA — Llama-3.1-Nemotron-Nano-8B</a></li>
+    <li><a href="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct" target="_blank" rel="noopener">Alibaba — Qwen2.5 7B Instruct</a></li>
+    <li><a href="https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3" target="_blank" rel="noopener">Mistral AI — Mistral 7B Instruct v0.3</a></li>
+    <li><a href="https://huggingface.co/docs/transformers/main/en/chat_templating" target="_blank" rel="noopener">Hugging Face — chat templating (how the glue is applied)</a></li>
+  </ul>
+
+  <div class="footer">
+    Source: <a href="https://github.com/kiriz/llm-basics" target="_blank">github.com/kiriz/llm-basics</a>
+    · Exhibits fetched from published tokenizer configs and rendered on identical input
+    · See the <a href="index.html">animated walk-throughs</a> for what happens after the blob goes in
+  </div>
+
+</div>
+</body>
+</html>
